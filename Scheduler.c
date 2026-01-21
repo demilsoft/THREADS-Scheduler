@@ -6,22 +6,28 @@
 #include "Scheduler.h"
 #include "Processes.h"
 
-Process processTable[MAX_PROCESSES];
-Process *runningProcess = NULL;
+////////////////////////////////////////////////////////////////////
+// Declarations
+Process processTable[MAXPROC];  // Keep track of processes in OS (MAXPROC is set to 50)
+Process* runningProcess = NULL;
 int nextPid = 1;
 int debugFlag = 1;
+
+// This will be removed test only
+int systemInitializing = 1;     // Temp var to set initialize flag
 
 static int watchdog(char*);
 static inline void disableInterrupts();
 void dispatcher();
-static int launch(void *);
+static int launch(void*);
 static void check_deadlock();
 static void DebugConsole(char* format, ...);
 
-/* DO NOT REMOVE */
+///* DO NOT REMOVE *///
 extern int SchedulerEntryPoint(void* pArgs);
 int check_io_scheduler();
 check_io_function check_io;
+////////////////////////////////////////////////////////////////////
 
 
 /*************************************************************************

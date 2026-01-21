@@ -1,3 +1,6 @@
+///////////////////////////////////////////////////////////////////////////////
+// No changes to this file are necessary for the basic scheduler functionality.
+///////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #define LOWEST_PRIORITY   0
@@ -5,7 +8,7 @@
 
 #define MAXNAME           256
 #define MAXARG            256
-#define MAXPROC           50
+#define MAXPROC           50		// Maximum number of processes
 
 /* Kill signals */
 #define SIG_TERM			15
