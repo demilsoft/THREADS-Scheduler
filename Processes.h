@@ -17,12 +17,13 @@ typedef struct _process
 	short			pid;					// Process id (pid) 
 	int				priority;
 	int				(*entryPoint) (void*);  // The entry point that is called from launch 
-	char*			stack;					// WILL NOT USE THIS - CAN BE REMOVED
+	//char*			stack;					// WILL NOT USE THIS - CAN BE REMOVED
 	unsigned int	stacksize;
 	int				status;					// READY, QUIT, BLOCKED, etc.
 
 	/* WHAT ELSE WILL WE NEED TO TRACK? ADD BELOW */
-	int				exitCode;				// Used in scheduler functions k_exit and k_wait
-	int				waitingOnChild;			// Will set to 1 if blocked
 
 } Process;
+
+// ADD CODE TO MANAGE PROCESS STRUCTURE AS NEEDED
+// FOR EXAMPLE, FUNCTIONS TO CREATE, DELETE, AND MANIPULATE PROCESS STRUCTURES
