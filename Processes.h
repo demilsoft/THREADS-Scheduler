@@ -1,7 +1,14 @@
-///////////////////////////////////////////////////////////////////////////////
-// Changes to this file should be reflected in Processes.c
+// Dean Lewis
+// Processes.h Helper File
 ///////////////////////////////////////////////////////////////////////////////
 #pragma once
+
+// DEFINE STD PROCESS STATES
+//#define PROC_EMPTY   0
+//#define PROC_READY   1
+//#define PROC_RUNNING 2
+//#define PROC_BLOCKED 3
+//#define PROC_QUIT    4
 
 typedef struct _process
 {
@@ -27,3 +34,33 @@ typedef struct _process
 
 // ADD CODE TO MANAGE PROCESS STRUCTURE AS NEEDED
 // FOR EXAMPLE, FUNCTIONS TO CREATE, DELETE, AND MANIPULATE PROCESS STRUCTURES
+
+//static void init_process_table(void)
+//{
+//    for (int i = 0; i < MAXPROC; i++)
+//    {
+//        processTable[i].nextReadyProcess = NULL;
+//        processTable[i].nextSiblingProcess = NULL;
+//        processTable[i].pParent = NULL;
+//        processTable[i].pChildren = NULL;
+//
+//        processTable[i].name[0] = '\0';
+//        processTable[i].startArgs[0] = '\0';
+//        processTable[i].context = NULL;
+//
+//        processTable[i].pid = 0;
+//        processTable[i].priority = 0;
+//        processTable[i].entryPoint = NULL;
+//        //processTable[i].stack = NULL;  // NOT UN USE
+//        processTable[i].stacksize = 0;
+//        processTable[i].status = PROC_EMPTY;
+//
+//        exitCodeSlot[i] = 0;
+//    }
+//
+//    for (int p = 0; p <= HIGHEST_PRIORITY; p++)
+//    {
+//        readyHeads[p] = NULL;
+//        readyTails[p] = NULL;
+//    }
+//}

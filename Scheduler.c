@@ -1,38 +1,50 @@
+// Dean Lewis
+// Schedule.c - Contains bootstrap()
+////////////////////////////////////////////////////////////////////
 
 #define _CRT_SECURE_NO_WARNINGS
 // LIBRARIES
 #include <stdio.h>
-#include <string.h>		//** ADDED	
-#include <stdarg.h>		//** ADDED
+#include <string.h>		                                                        //** ADDED	
+#include <stdarg.h>		                                                        //** ADDED
 // HELPER FILES
 #include "THREADSLib.h"
 #include "Scheduler.h"
 #include "Processes.h"
 
-////////////////////////////////////////////////////////////////////
-// DECLARATIONS
-Process processTable[MAXPROC];  // Keep track of processes in OS (MAXPROC is set to 50)
+// DECLARATIONS ////////////////////////////////////////////////////
+Process processTable[MAXPROC];          // Keep track of processes in OS (MAXPROC is set to 50)
 Process* runningProcess = NULL;
 int nextPid = 1;
 int debugFlag = 1;
+// END DECLARATIONS
 
-// This will be removed test only
-// int systemInitializing = 1;     // Temp var to set initialize flag
-
+// FUNCTION PROTOTYPES /////////////////////////////////////////////
 static int watchdog(char*);
-static inline void disableInterrupts();
-static inline void enableInterrupts();		//** ADDED
 void dispatcher();
 static int launch(void*);
 static void check_deadlock();
 static void DebugConsole(char* format, ...);
+static inline void disableInterrupts();
+static inline void enableInterrupts();		                                    //** ADDED
+static int find_free_slot(void);		                                        //** ADDED
+static void ready_enqueue(Process* p);		                                    //** ADDED
+static Process* ready_dequeue_highest(void);		                            //** ADDED
+static void add_child(Process* parent, Process* child);		                    //** ADDED
+static Process* find_quit_child(Process* parent, Process** pPrevOut);		    //** ADDED
+static void remove_child_link(Process* parent, Process* child, Process* prev);	//** ADDED
+static Process* find_process_by_pid(int pid);		                            //** ADDED
 
-///* DO NOT REMOVE *///
+///* DO NOT REMOVE FOLLOWING *///
 extern int SchedulerEntryPoint(void* pArgs);
 int check_io_scheduler();
 check_io_function check_io;
-// END DECLARATIONS
 ////////////////////////////////////////////////////////////////////
+
+// FUNCTION PROTOTYPES ADDED ///////////////////////////////////////
+////////////////////////////////////////////////////////////////////
+ 
+
 //********************************** ADDED
 /* Minimal internal scheduler state for SchedulerTest00 */
 #define PROC_EMPTY   0
@@ -76,92 +88,6 @@ static void init_process_table(void)
     }
 }
 
-static int find_free_slot(void)
-{
-    for (int i = 1; i < MAXPROC; i++) // leave slot 0 unused
-    {
-        if (processTable[i].status == PROC_EMPTY)
-            return i;
-    }
-    return -1;
-}
-
-static void ready_enqueue(Process* p)
-{
-    int pr = p->priority;
-    p->nextReadyProcess = NULL;
-
-    if (readyTails[pr] == NULL)
-    {
-        readyHeads[pr] = readyTails[pr] = p;
-    }
-    else
-    {
-        readyTails[pr]->nextReadyProcess = p;
-        readyTails[pr] = p;
-    }
-}
-
-static Process* ready_dequeue_highest(void)
-{
-    for (int pr = HIGHEST_PRIORITY; pr >= LOWEST_PRIORITY; pr--)
-    {
-        if (readyHeads[pr] != NULL)
-        {
-            Process* p = readyHeads[pr];
-            readyHeads[pr] = p->nextReadyProcess;
-            if (readyHeads[pr] == NULL) readyTails[pr] = NULL;
-            p->nextReadyProcess = NULL;
-            return p;
-        }
-    }
-    return NULL;
-}
-
-static void add_child(Process* parent, Process* child)
-{
-    child->pParent = parent;
-    child->nextSiblingProcess = parent->pChildren;
-    parent->pChildren = child;
-}
-
-static Process* find_quit_child(Process* parent, Process** pPrevOut)
-{
-    Process* prev = NULL;
-    Process* cur = parent->pChildren;
-
-    while (cur != NULL)
-    {
-        if (cur->status == PROC_QUIT)
-        {
-            if (pPrevOut) *pPrevOut = prev;
-            return cur;
-        }
-        prev = cur;
-        cur = cur->nextSiblingProcess;
-    }
-
-    if (pPrevOut) *pPrevOut = NULL;
-    return NULL;
-}
-
-static void remove_child_link(Process* parent, Process* child, Process* prev)
-{
-    if (prev == NULL) parent->pChildren = child->nextSiblingProcess;
-    else prev->nextSiblingProcess = child->nextSiblingProcess;
-
-    child->nextSiblingProcess = NULL;
-}
-
-static Process* find_process_by_pid(int pid)
-{
-    for (int i = 1; i < MAXPROC; i++)
-    {
-        if (processTable[i].status != PROC_EMPTY && processTable[i].pid == pid)
-            return &processTable[i];
-    }
-    return NULL;
-}
 //********************************** END ADDED
 
 /*************************************************************************
@@ -450,6 +376,7 @@ void k_exit(int code)
     disableInterrupts();
 
     Process* me = runningProcess;
+
     if (me == NULL)
     {
         enableInterrupts();
@@ -478,6 +405,7 @@ void k_exit(int code)
     }
 
     enableInterrupts();
+
     dispatcher();
 //********************************** ADDED	
 }
@@ -495,9 +423,10 @@ int k_kill(int pid, int signal)
 {
     int result = 0;
 //********************************** ADDED	
-
     disableInterrupts();
+
     Process* p = find_process_by_pid(pid);
+
     if (p == NULL)
     {
         enableInterrupts();				   
@@ -506,6 +435,7 @@ int k_kill(int pid, int signal)
 
     /* Minimal for now; scheduler tests later will define behavior. */
     (void)signal;
+
     enableInterrupts();
 
     return result;
@@ -556,6 +486,7 @@ int signaled()
 {
     return 0;
 }
+
 /*************************************************************************
    Name - readtime
 *************************************************************************/
@@ -655,11 +586,8 @@ static inline void disableInterrupts()
 
     /* We ARE in kernel mode */
 
-
     int psr = get_psr();
-
     psr = psr & ~PSR_INTERRUPTS;
-
     set_psr( psr);
 
 } /* disableInterrupts */
@@ -667,11 +595,104 @@ static inline void disableInterrupts()
 //********************************** ADDED	
 static inline void enableInterrupts()
 {
+
+    /* We ARE in kernel mode */
+
     int psr = get_psr();
     psr = psr | PSR_INTERRUPTS;
     set_psr(psr);
-}
+} /* enableInterrupts */
 //********************************** ADDED	
+
+// ADDED PROTOTYPES -> MOVE TO PROCESSES.h
+static int find_free_slot(void)
+{
+    for (int i = 1; i < MAXPROC; i++) // leave slot 0 unused
+    {
+        if (processTable[i].status == PROC_EMPTY)
+            return i;
+    }
+    return -1;
+}
+
+static void ready_enqueue(Process* p)
+{
+    int pr = p->priority;
+    p->nextReadyProcess = NULL;
+
+    if (readyTails[pr] == NULL)
+    {
+        readyHeads[pr] = readyTails[pr] = p;
+    }
+    else
+    {
+        readyTails[pr]->nextReadyProcess = p;
+        readyTails[pr] = p;
+    }
+}
+
+static Process* ready_dequeue_highest(void)
+{
+    for (int pr = HIGHEST_PRIORITY; pr >= LOWEST_PRIORITY; pr--)
+    {
+        if (readyHeads[pr] != NULL)
+        {
+            Process* p = readyHeads[pr];
+            readyHeads[pr] = p->nextReadyProcess;
+            if (readyHeads[pr] == NULL) readyTails[pr] = NULL;
+            p->nextReadyProcess = NULL;
+            return p;
+        }
+    }
+    return NULL;
+}
+
+static void add_child(Process* parent, Process* child)
+{
+    child->pParent = parent;
+    child->nextSiblingProcess = parent->pChildren;
+    parent->pChildren = child;
+}
+
+static Process* find_quit_child(Process* parent, Process** pPrevOut)
+{
+    Process* prev = NULL;
+    Process* cur = parent->pChildren;
+
+    while (cur != NULL)
+    {
+        if (cur->status == PROC_QUIT)
+        {
+            if (pPrevOut) *pPrevOut = prev;
+            return cur;
+        }
+        prev = cur;
+        cur = cur->nextSiblingProcess;
+    }
+
+    if (pPrevOut) *pPrevOut = NULL;
+    return NULL;
+}
+
+static void remove_child_link(Process* parent, Process* child, Process* prev)
+{
+    if (prev == NULL) parent->pChildren = child->nextSiblingProcess;
+    else prev->nextSiblingProcess = child->nextSiblingProcess;
+
+    child->nextSiblingProcess = NULL;
+}
+
+static Process* find_process_by_pid(int pid)
+{
+    for (int i = 1; i < MAXPROC; i++)
+    {
+        if (processTable[i].status != PROC_EMPTY && processTable[i].pid == pid)
+            return &processTable[i];
+    }
+    return NULL;
+}
+
+
 /**************************************************************************
    Name - DebugConsole
    Purpose - Prints  the message to the console_output if in debug mode
