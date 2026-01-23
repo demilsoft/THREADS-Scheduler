@@ -5,19 +5,22 @@
 #define _CRT_SECURE_NO_WARNINGS
 // LIBRARIES
 #include <stdio.h>
-#include <string.h>		                                                        //** ADDED	
-#include <stdarg.h>		                                                        //** ADDED
+//#include <string.h>		                                                    //** ADDED	
+//#include <stdarg.h>		                                                    //** ADDED
 // HELPER FILES
 #include "THREADSLib.h"
 #include "Scheduler.h"
 #include "Processes.h"
 
 // DECLARATIONS ////////////////////////////////////////////////////
-Process processTable[MAXPROC];          // Keep track of processes in OS (MAXPROC is set to 50)
+Process processTable[MAXPROC];                                                  // Keep track of processes in OS (MAXPROC is set to 50)
 Process* runningProcess = NULL;
 int nextPid = 1;
 int debugFlag = 1;
-// END DECLARATIONS
+static Process* readyHeads[HIGHEST_PRIORITY + 1];
+static Process* readyTails[HIGHEST_PRIORITY + 1];
+static int exitCodeSlot[MAXPROC];                                               // Array to temp store status
+// END DECLARATIONS ////////////////////////////////////////////////
 
 // FUNCTION PROTOTYPES /////////////////////////////////////////////
 static int watchdog(char*);
@@ -27,68 +30,21 @@ static void check_deadlock();
 static void DebugConsole(char* format, ...);
 static inline void disableInterrupts();
 static inline void enableInterrupts();		                                    //** ADDED
+static Process* find_process_by_pid(int pid);		                            //** ADDED
+static Process* ready_dequeue_highest(void);		                            //** ADDED
+static Process* find_quit_child(Process* parent, Process** pPrevOut);		    //** ADDED
 static int find_free_slot(void);		                                        //** ADDED
 static void ready_enqueue(Process* p);		                                    //** ADDED
-static Process* ready_dequeue_highest(void);		                            //** ADDED
 static void add_child(Process* parent, Process* child);		                    //** ADDED
-static Process* find_quit_child(Process* parent, Process** pPrevOut);		    //** ADDED
 static void remove_child_link(Process* parent, Process* child, Process* prev);	//** ADDED
-static Process* find_process_by_pid(int pid);		                            //** ADDED
+static void init_process_table(void);
+// END FUNCTION  PROTOTYPES ////////////////////////////////////////
 
-///* DO NOT REMOVE FOLLOWING *///
+///* DO NOT REMOVE FOLLOWING *//////////////////////////////////////
 extern int SchedulerEntryPoint(void* pArgs);
 int check_io_scheduler();
 check_io_function check_io;
 ////////////////////////////////////////////////////////////////////
-
-// FUNCTION PROTOTYPES ADDED ///////////////////////////////////////
-////////////////////////////////////////////////////////////////////
- 
-
-//********************************** ADDED
-/* Minimal internal scheduler state for SchedulerTest00 */
-#define PROC_EMPTY   0
-#define PROC_READY   1
-#define PROC_RUNNING 2
-#define PROC_BLOCKED 3
-#define PROC_QUIT    4
-
-static Process* readyHeads[HIGHEST_PRIORITY + 1];
-static Process* readyTails[HIGHEST_PRIORITY + 1];
-static int exitCodeSlot[MAXPROC];
-
-/* Internal helper functions */
-static void init_process_table(void)
-{
-    for (int i = 0; i < MAXPROC; i++)
-    {
-        processTable[i].nextReadyProcess = NULL;
-        processTable[i].nextSiblingProcess = NULL;
-        processTable[i].pParent = NULL;
-        processTable[i].pChildren = NULL;
-
-        processTable[i].name[0] = '\0';
-        processTable[i].startArgs[0] = '\0';
-        processTable[i].context = NULL;
-
-        processTable[i].pid = 0;
-        processTable[i].priority = 0;
-        processTable[i].entryPoint = NULL;
-        //processTable[i].stack = NULL;  // NOT UN USE
-        processTable[i].stacksize = 0;
-        processTable[i].status = PROC_EMPTY;
-
-        exitCodeSlot[i] = 0;
-    }
-
-    for (int p = 0; p <= HIGHEST_PRIORITY; p++)
-    {
-        readyHeads[p] = NULL;
-        readyTails[p] = NULL;
-    }
-}
-
-//********************************** END ADDED
 
 /*************************************************************************
    bootstrap()
@@ -120,16 +76,20 @@ int bootstrap(void *pArgs)
     check_io = check_io_scheduler;
 
     /* Initialize the process table. */
-    disableInterrupts();		//** ADDED
-    init_process_table();		//** ADDED
+
+    // Disabling interrupts to protect from errand execution
+    disableInterrupts();		                                //** ADDED
+
+    // Initialize ProcessTable
+    init_process_table();		                                //** ADDED
 
     /* Initialize the Ready list, etc. */
     /* (ready lists initialized in init_process_table) */		//** ADDED					 
 
     /* Initialize the clock interrupt handler */
-    /* (not required for SchedulerTest00) */		//** ADDED
+    /* (not required for SchedulerTest00) */		            //** ADDED
 
-    /* startup a watchdog process */
+    // SPAWN watchdog process
     result = k_spawn("watchdog", watchdog, NULL, THREADS_MIN_STACK_SIZE, LOWEST_PRIORITY);
     if (result < 0)
     {
@@ -137,7 +97,8 @@ int bootstrap(void *pArgs)
         stop(1);
     }
 
-    /* start the test process, which is the main for each test program.  */
+    // Spawn test parent process, which is the main for each test program.  */
+    // Execute SchedulerEntryPoint 
     result = k_spawn("Scheduler", SchedulerEntryPoint, NULL, 2 * THREADS_MIN_STACK_SIZE, HIGHEST_PRIORITY);
     if (result < 0)
     {
@@ -145,12 +106,13 @@ int bootstrap(void *pArgs)
         stop(1);
     }
 
-    /* Initialized and ready to go!! */
-    enableInterrupts();		//** ADDED
-    dispatcher();		//** ADDED
+    // Re-enable interrupt processing
+    enableInterrupts();		                                    //** ADDED
+
+    // Performe next context switching
+    dispatcher();
 
     /* This should never return since we are not a real process. */
-
     stop(-3);
     return 0;
 
@@ -177,7 +139,8 @@ int k_spawn(char* name, int (*entryPoint)(void *), void* arg, int stacksize, int
     int proc_slot;
     struct _process* pNewProc;
 
-    DebugConsole("spawn(): creating process %s\n", name);
+    // Comment following line to correct output
+    // DebugConsole("spawn(): creating process %s\n", name);
 
     disableInterrupts();
 
@@ -185,7 +148,7 @@ int k_spawn(char* name, int (*entryPoint)(void *), void* arg, int stacksize, int
     if (name == NULL)
     {
         console_output(debugFlag, "spawn(): Name value is NULL.\n");
-        enableInterrupts();		//** ADDED
+        enableInterrupts();		                                //** ADDED
         return -1;
     }
     if (strlen(name) >= (MAXNAME - 1))
@@ -215,8 +178,8 @@ int k_spawn(char* name, int (*entryPoint)(void *), void* arg, int stacksize, int
 //********************************** ADDED
     /* Find an empty slot in the process table */
     
-    // proc_slot = 1;  // just use 1 for now!		//** ADDED ALTERED CODE
-    proc_slot = find_free_slot();		//** ADDED
+    // proc_slot = 1;  // just use 1 for now!		            //** ADDED ALTERED CODE
+    proc_slot = find_free_slot();		                        //** ADDED
 //********************************** ADDED
     if (proc_slot < 0)
     {
@@ -228,15 +191,18 @@ int k_spawn(char* name, int (*entryPoint)(void *), void* arg, int stacksize, int
     pNewProc = &processTable[proc_slot];
 
     /* Setup the entry in the process table. */
-    memset(pNewProc, 0, sizeof(Process));		//** ADDED							 
+    memset(pNewProc, 0, sizeof(Process));		    //** ADDED							 
     strcpy(pNewProc->name, name);
 //********************************** ADDED
     pNewProc->pid = nextPid++;
     pNewProc->priority = priority;
     pNewProc->entryPoint = entryPoint;
-    pNewProc->status = PROC_READY;
+    pNewProc->status = PROCSTATE_READY;
     pNewProc->stacksize = (unsigned int)stacksize;								
 //********************************** ADDED		  
+
+    // Added debug output to find error with new process name
+    DebugConsole("k_spawn(): slot=%d oldStatus=%d oldPid=%d oldName='%s'\n", proc_slot, pNewProc->status, pNewProc->pid, pNewProc->name);
 
     /* If there is a parent process,add this to the list of children. */
     if (runningProcess != NULL)
@@ -255,7 +221,6 @@ int k_spawn(char* name, int (*entryPoint)(void *), void* arg, int stacksize, int
     enableInterrupts();		//** ADDED	
     return pNewProc->pid;
 
-
 } /* spawn */
 
 /**************************************************************************
@@ -270,8 +235,8 @@ int k_spawn(char* name, int (*entryPoint)(void *), void* arg, int stacksize, int
 *************************************************************************/
 static int launch(void *args)
 {
-
-    DebugConsole("launch(): started: %s\n", runningProcess->name);
+    // Comment following line to correct output
+    // DebugConsole("launch(): started: %s\n", runningProcess->name);
 
     /* Enable interrupts */
     enableInterrupts();		//** ADDED				   
@@ -341,7 +306,7 @@ int k_wait(int* code)
             remove_child_link(runningProcess, dead, prev);
 
             /* reclaim the process table entry */
-            processTable[slot].status = PROC_EMPTY;
+            processTable[slot].status = PROCSTATE_EMPTY;
             processTable[slot].pid = 0;
             processTable[slot].context = NULL;
             exitCodeSlot[slot] = 0;
@@ -351,7 +316,7 @@ int k_wait(int* code)
         }
 
         /* block until a child quits */
-        runningProcess->status = PROC_BLOCKED;
+        runningProcess->status = PROCSTATE_BLOCKED;
         enableInterrupts();
         dispatcher();
         disableInterrupts();
@@ -387,12 +352,12 @@ void k_exit(int code)
     int mySlot = (int)(me - processTable);
     exitCodeSlot[mySlot] = code;
 
-    me->status = PROC_QUIT;
+    me->status = PROCSTATE_TERMINATED;
 
     /* Wake parent if it is waiting */
-    if (me->pParent != NULL && me->pParent->status == PROC_BLOCKED)
+    if (me->pParent != NULL && me->pParent->status == PROCSTATE_BLOCKED)
     {
-        me->pParent->status = PROC_READY;
+        me->pParent->status = PROCSTATE_READY;
         ready_enqueue(me->pParent);
     }
 
@@ -430,7 +395,7 @@ int k_kill(int pid, int signal)
     if (p == NULL)
     {
         enableInterrupts();				   
-		return 0;		//** ADDED ALTERED POSITION
+		return 0;		                                    //** ADDED ALTERED POSITION
     }
 
     /* Minimal for now; scheduler tests later will define behavior. */
@@ -457,7 +422,7 @@ int k_getpid()
 int k_join(int pid, int* pChildExitCode)
 {
     (void)pid;		//** ADDED
-    (void)pChildExitCode;			//** ADDED	 
+    (void)pChildExitCode;			                        //** ADDED	 
     return 0;
 }
 
@@ -466,7 +431,7 @@ int k_join(int pid, int* pChildExitCode)
 *************************************************************************/
 int unblock(int pid)
 {
-    (void)pid;		//** ADDED
+    (void)pid;		                                        //** ADDED
     return 0;
 }
 
@@ -475,7 +440,7 @@ int unblock(int pid)
 *************************************************************************/
 int block(int newStatus)
 {
-    (void)newStatus;		//** ADDED			
+    (void)newStatus;		                                //** ADDED			
     return 0;
 }
 
@@ -484,6 +449,7 @@ int block(int newStatus)
 *************************************************************************/
 int signaled()
 {
+    // Currently not in use
     return 0;
 }
 
@@ -492,6 +458,7 @@ int signaled()
 *************************************************************************/
 int read_time()
 {
+    // Currently not in use
     return 0;
 }
 
@@ -505,7 +472,7 @@ DWORD read_clock()
 
 void display_process_table()
 {
-
+    // Currently not in use
 }
 
 /**************************************************************************
@@ -526,7 +493,7 @@ void dispatcher()
     disableInterrupts();
 //********************************** ADDED	
     //Process *nextProcess = NULL;
-    nextProcess = ready_dequeue_highest();		//** ADDED ALTERED CODE
+    nextProcess = ready_dequeue_highest();		            //** ADDED ALTERED CODE
 //********************************** ADDED	
     if (nextProcess == NULL)
     {
@@ -535,17 +502,18 @@ void dispatcher()
     }
 
     /* If the currently running process is still runnable, put it back on ready */
-    if (runningProcess != NULL && runningProcess->status == PROC_RUNNING)
+    if (runningProcess != NULL && runningProcess->status == PROCSTATE_RUNNING)
     {
-        runningProcess->status = PROC_READY;
+        runningProcess->status = PROCSTATE_READY;
         ready_enqueue(runningProcess);
     }
 
     runningProcess = nextProcess;
-    runningProcess->status = PROC_RUNNING;
+    runningProcess->status = PROCSTATE_RUNNING;
 
     enableInterrupts();
 //********************************** ADDED	
+
     /* IMPORTANT: context switch enables interrupts. */
     context_switch(nextProcess->context);
 
@@ -564,7 +532,8 @@ void dispatcher()
    *************************************************************************/
 static int watchdog(char* dummy)
 {
-    DebugConsole("watchdog(): called\n");
+    // Comment following line to correct output
+    // DebugConsole("watchdog(): called\n");
     while (1)
     {
         check_deadlock();
@@ -576,26 +545,24 @@ static int watchdog(char* dummy)
 /* check to determine if deadlock has occurred... */
 static void check_deadlock()
 {
+    // Currently not in use
 }
 
-/*
- * Disables the interrupts.
- */
+// Disables the interrupts
 static inline void disableInterrupts()
 {
-
     /* We ARE in kernel mode */
 
     int psr = get_psr();
     psr = psr & ~PSR_INTERRUPTS;
     set_psr( psr);
 
-} /* disableInterrupts */
+}
 
 //********************************** ADDED	
+// Enables the interrupts
 static inline void enableInterrupts()
 {
-
     /* We ARE in kernel mode */
 
     int psr = get_psr();
@@ -604,17 +571,18 @@ static inline void enableInterrupts()
 } /* enableInterrupts */
 //********************************** ADDED	
 
-// ADDED PROTOTYPES -> MOVE TO PROCESSES.h
+// Finds an unused entry in the process table to allocate for a new process.
 static int find_free_slot(void)
 {
-    for (int i = 1; i < MAXPROC; i++) // leave slot 0 unused
+    for (int i = 1; i < MAXPROC; i++)   // leave slot 0 unused
     {
-        if (processTable[i].status == PROC_EMPTY)
+        if (processTable[i].status == PROCSTATE_EMPTY)
             return i;
     }
     return -1;
 }
-
+ 
+// Adds a process to the ready queue based on its priority.
 static void ready_enqueue(Process* p)
 {
     int pr = p->priority;
@@ -631,6 +599,8 @@ static void ready_enqueue(Process* p)
     }
 }
 
+// Selects and removes the highest priority READY process from the ready queues. 
+// Priority is determined from highest to lowest.
 static Process* ready_dequeue_highest(void)
 {
     for (int pr = HIGHEST_PRIORITY; pr >= LOWEST_PRIORITY; pr--)
@@ -647,6 +617,7 @@ static Process* ready_dequeue_highest(void)
     return NULL;
 }
 
+// Adds a child process to a parent process's list of children
 static void add_child(Process* parent, Process* child)
 {
     child->pParent = parent;
@@ -654,6 +625,7 @@ static void add_child(Process* parent, Process* child)
     parent->pChildren = child;
 }
 
+// Searches a parent process's child list for a child that has terminated
 static Process* find_quit_child(Process* parent, Process** pPrevOut)
 {
     Process* prev = NULL;
@@ -661,7 +633,7 @@ static Process* find_quit_child(Process* parent, Process** pPrevOut)
 
     while (cur != NULL)
     {
-        if (cur->status == PROC_QUIT)
+        if (cur->status == PROCSTATE_TERMINATED)
         {
             if (pPrevOut) *pPrevOut = prev;
             return cur;
@@ -674,6 +646,7 @@ static Process* find_quit_child(Process* parent, Process** pPrevOut)
     return NULL;
 }
 
+// Removes a child process from its parent's list of children.
 static void remove_child_link(Process* parent, Process* child, Process* prev)
 {
     if (prev == NULL) parent->pChildren = child->nextSiblingProcess;
@@ -682,17 +655,53 @@ static void remove_child_link(Process* parent, Process* child, Process* prev)
     child->nextSiblingProcess = NULL;
 }
 
+// Searches the process table for a process by pid
 static Process* find_process_by_pid(int pid)
 {
     for (int i = 1; i < MAXPROC; i++)
     {
-        if (processTable[i].status != PROC_EMPTY && processTable[i].pid == pid)
+        if (processTable[i].status != PROCSTATE_EMPTY && processTable[i].pid == pid)
             return &processTable[i];
     }
     return NULL;
 }
 
+//********************************** ADDED	
+// Instantiate each process in the procTable (1 - MAXPROC)
+// These could be done on demand but easier to make sure we have a clean set when a new process is created.
+static void init_process_table(void)
+{
+    for (int i = 0; i < MAXPROC; i++)
+    {
+        // Parent-Child hierarchy and navigation
+        processTable[i].nextReadyProcess = NULL;        // struct _process
+        processTable[i].nextSiblingProcess = NULL;      // struct _process
+        processTable[i].pParent = NULL;                 // struct _process
+        processTable[i].pChildren = NULL;               // struct _process               
 
+        processTable[i].name[0] = '\0';                 // NULL String
+        processTable[i].startArgs[0] = '\0';            // NULL String
+        processTable[i].context = NULL;                 // Void Variant
+        processTable[i].pid = 0;                        // Short
+        processTable[i].priority = 0;                   // int
+        processTable[i].entryPoint = NULL;              // int ptr
+        //processTable[i].stack = NULL;                 // ***NOT UN USE***
+        processTable[i].stacksize = 0;                  // unsigned int
+        processTable[i].status = PROCSTATE_EMPTY;       // Set with 0 state when instantiated
+
+        exitCodeSlot[i] = PROCSTATE_EMPTY;              // int set to EMPTY
+    }
+
+    for (int p = 0; p <= HIGHEST_PRIORITY; p++)
+    {
+        readyHeads[p] = NULL;                           // Reset head and tails to NULL
+        readyTails[p] = NULL;
+    }
+}
+//********************************** END ADDED
+
+///////////////////////////////////////////////////////////////////////////
+///////////////////////  DEBUG CONSOLE FUNCTIONS //////////////////////////
 /**************************************************************************
    Name - DebugConsole
    Purpose - Prints  the message to the console_output if in debug mode
@@ -715,9 +724,9 @@ static void DebugConsole(char* format, ...)
     }
 }
 
-
 /* there is no I/O yet, so return false. */
 int check_io_scheduler()
 {
     return false;
 }
+///////////////////////////////////////////////////////////////////////////
