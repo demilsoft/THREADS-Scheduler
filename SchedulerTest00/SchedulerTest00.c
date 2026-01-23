@@ -11,6 +11,13 @@
 * Simple test case that creates one child process, waits for the process to 
 * terminate, and then exits.
 *
+*    SchedulerTest00: started
+*    SchedulerTest00: after spawn of child with pid 3
+*    SchedulerTest00: waiting for child process
+*    SchedulerTest00-Child1: started
+*    SchedulerTest00-Child1: quitting
+*    SchedulerTest00: exit status for child 3 is -3
+*    All processes completed.
 *********************************************************************************/
 int SchedulerEntryPoint(void* pArgs)
 {

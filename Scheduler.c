@@ -5,8 +5,8 @@
 #define _CRT_SECURE_NO_WARNINGS
 // LIBRARIES
 #include <stdio.h>
-//#include <string.h>		                                                    //** ADDED	
-//#include <stdarg.h>		                                                    //** ADDED
+#include <string.h>		                                                    //** ADDED	
+#include <stdarg.h>		                                                    //** ADDED
 // HELPER FILES
 #include "THREADSLib.h"
 #include "Scheduler.h"
@@ -16,7 +16,7 @@
 Process processTable[MAXPROC];                                                  // Keep track of processes in OS (MAXPROC is set to 50)
 Process* runningProcess = NULL;
 int nextPid = 1;
-int debugFlag = 1;
+int debugFlag = 0;                                                              // 0 = no debug output, 1 = debug output
 static Process* readyHeads[HIGHEST_PRIORITY + 1];
 static Process* readyTails[HIGHEST_PRIORITY + 1];
 static int exitCodeSlot[MAXPROC];                                               // Array to temp store status
@@ -75,19 +75,8 @@ int bootstrap(void *pArgs)
     /* set this to the scheduler version of this function.*/
     check_io = check_io_scheduler;
 
-    /* Initialize the process table. */
-
-    // Disabling interrupts to protect from errand execution
-    disableInterrupts();		                                //** ADDED
-
     // Initialize ProcessTable
-    init_process_table();		                                //** ADDED
-
-    /* Initialize the Ready list, etc. */
-    /* (ready lists initialized in init_process_table) */		//** ADDED					 
-
-    /* Initialize the clock interrupt handler */
-    /* (not required for SchedulerTest00) */		            //** ADDED
+    init_process_table();		               		 
 
     // SPAWN watchdog process
     result = k_spawn("watchdog", watchdog, NULL, THREADS_MIN_STACK_SIZE, LOWEST_PRIORITY);
@@ -106,16 +95,12 @@ int bootstrap(void *pArgs)
         stop(1);
     }
 
-    // Re-enable interrupt processing
-    enableInterrupts();		                                    //** ADDED
-
     // Performe next context switching
     dispatcher();
 
     /* This should never return since we are not a real process. */
     stop(-3);
     return 0;
-
 }
 
 /*************************************************************************
@@ -140,7 +125,7 @@ int k_spawn(char* name, int (*entryPoint)(void *), void* arg, int stacksize, int
     struct _process* pNewProc;
 
     // Comment following line to correct output
-    // DebugConsole("spawn(): creating process %s\n", name);
+    DebugConsole("spawn(): creating process %s\n", name);
 
     disableInterrupts();
 
@@ -177,8 +162,7 @@ int k_spawn(char* name, int (*entryPoint)(void *), void* arg, int stacksize, int
     }
 //********************************** ADDED
     /* Find an empty slot in the process table */
-    
-    // proc_slot = 1;  // just use 1 for now!		            //** ADDED ALTERED CODE
+
     proc_slot = find_free_slot();		                        //** ADDED
 //********************************** ADDED
     if (proc_slot < 0)
@@ -191,34 +175,36 @@ int k_spawn(char* name, int (*entryPoint)(void *), void* arg, int stacksize, int
     pNewProc = &processTable[proc_slot];
 
     /* Setup the entry in the process table. */
-    memset(pNewProc, 0, sizeof(Process));		    //** ADDED							 
+    memset(pNewProc, 0, sizeof(Process));		                //** ADDED							 
     strcpy(pNewProc->name, name);
 //********************************** ADDED
     pNewProc->pid = nextPid++;
     pNewProc->priority = priority;
     pNewProc->entryPoint = entryPoint;
     pNewProc->status = PROCSTATE_READY;
-    pNewProc->stacksize = (unsigned int)stacksize;								
-//********************************** ADDED		  
+    pNewProc->stacksize = (unsigned int)stacksize;	
 
+//********************************** ADDED		  
     // Added debug output to find error with new process name
     DebugConsole("k_spawn(): slot=%d oldStatus=%d oldPid=%d oldName='%s'\n", proc_slot, pNewProc->status, pNewProc->pid, pNewProc->name);
 
     /* If there is a parent process,add this to the list of children. */
     if (runningProcess != NULL)
     {
-        add_child(runningProcess, pNewProc);		//** ADDED								
+        add_child(runningProcess, pNewProc);		            //** ADDED								
     }
 
-    /* Add the process to the ready list. */
-    ready_enqueue(pNewProc);		//** ADDED						
+    // Testing args value
+    DebugConsole( "k_spawn(): pid=%d name='%s' argPtr=%p argStr='%s'\n", pNewProc->pid, pNewProc->name, arg, (arg ? (char*)arg : "(null)"));
 
     /* Initialize context for this process, but use launch function pointer for
-     * the initial value of the process's program counter (PC)
-    */
-    pNewProc->context = context_initialize(launch, stacksize, arg);
+     * the initial value of the process's program counter (PC) */
+    pNewProc->context = context_initialize(launch, stacksize, arg);           
 
-    enableInterrupts();		//** ADDED	
+    /* Add the process to the ready list. */
+    ready_enqueue(pNewProc);		                            //** ADDED	
+
+    enableInterrupts();		                                    //** ADDED	
     return pNewProc->pid;
 
 } /* spawn */
@@ -233,30 +219,23 @@ int k_spawn(char* name, int (*entryPoint)(void *), void* arg, int stacksize, int
 
    Returns - nothing
 *************************************************************************/
-static int launch(void *args)
+static int launch(void* args)
 {
-    // Comment following line to correct output
-    // DebugConsole("launch(): started: %s\n", runningProcess->name);
+    (void)args;  // ignore whatever the context library passed us
 
-    /* Enable interrupts */
-    enableInterrupts();		//** ADDED				   
+    DebugConsole("launch(): started: %s\n", runningProcess->name);
 
-    /* Call the function passed to spawn and capture its return value */						
-//********************************** ADDED		  
+    enableInterrupts();
+
     int rc = 0;
     if (runningProcess && runningProcess->entryPoint)
     {
-        rc = runningProcess->entryPoint(args);
+        rc = runningProcess->entryPoint(runningProcess->name);
     }
-						
-//********************************** ADDED		  
-    DebugConsole("Process %d returned to launch\n", runningProcess->pid);
 
-    /* Stop the process gracefully */
-    k_exit(rc);		//** ADDED	
-
+    k_exit(rc);
     return 0;
-} 
+}
 
 /**************************************************************************
    Name - k_wait
@@ -352,7 +331,7 @@ void k_exit(int code)
     int mySlot = (int)(me - processTable);
     exitCodeSlot[mySlot] = code;
 
-    me->status = PROCSTATE_TERMINATED;
+    me->status = PROCSTATE_TERMINATE;
 
     /* Wake parent if it is waiting */
     if (me->pParent != NULL && me->pParent->status == PROCSTATE_BLOCKED)
@@ -487,14 +466,13 @@ void display_process_table()
 *************************************************************************/
 void dispatcher()
 {
-//********************************** ADDED	
     Process* nextProcess = NULL;
 
     disableInterrupts();
-//********************************** ADDED	
+
     //Process *nextProcess = NULL;
     nextProcess = ready_dequeue_highest();		            //** ADDED ALTERED CODE
-//********************************** ADDED	
+
     if (nextProcess == NULL)
     {
         enableInterrupts();
@@ -512,7 +490,6 @@ void dispatcher()
     runningProcess->status = PROCSTATE_RUNNING;
 
     enableInterrupts();
-//********************************** ADDED	
 
     /* IMPORTANT: context switch enables interrupts. */
     context_switch(nextProcess->context);
@@ -533,7 +510,8 @@ void dispatcher()
 static int watchdog(char* dummy)
 {
     // Comment following line to correct output
-    // DebugConsole("watchdog(): called\n");
+    DebugConsole("watchdog(): called\n");
+
     while (1)
     {
         check_deadlock();
@@ -633,7 +611,7 @@ static Process* find_quit_child(Process* parent, Process** pPrevOut)
 
     while (cur != NULL)
     {
-        if (cur->status == PROCSTATE_TERMINATED)
+        if (cur->status == PROCSTATE_TERMINATE)
         {
             if (pPrevOut) *pPrevOut = prev;
             return cur;

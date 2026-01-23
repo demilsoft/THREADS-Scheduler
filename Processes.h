@@ -8,7 +8,7 @@
 #define PROCSTATE_READY       1
 #define PROCSTATE_RUNNING     2
 #define PROCSTATE_BLOCKED     3
-#define PROCSTATE_TERMINATED  4
+#define PROCSTATE_TERMINATE   4
 
 typedef struct _process
 {
