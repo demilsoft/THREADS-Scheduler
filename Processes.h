@@ -2,6 +2,8 @@
 // Processes.h Helper File
 ///////////////////////////////////////////////////////////////////////////////
 #pragma once
+#include "THREADSLib.h"
+#include "Scheduler.h" 
 
 // DEFINE STD PROCESS STATE MACROS
 #define PROCSTATE_EMPTY       0
@@ -31,3 +33,18 @@ typedef struct _process
 
 } Process;
 
+extern Process processTable[MAXPROC];
+extern int nextPid;
+extern int exitCodeSlot[MAXPROC];
+
+void processes_init(void);
+
+int process_find_free_slot(void);
+Process* process_find_by_pid(int pid);
+
+void process_add_child(Process* parent, Process* child);
+Process* process_find_quit_child(Process* parent, Process** pPrevOut);
+void process_remove_child_link(Process* parent, Process* child, Process* prev);
+
+void ready_enqueue(Process* p);
+Process* ready_dequeue_highest(void);
