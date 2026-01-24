@@ -12,6 +12,24 @@
 * The child process creates two child processes of a lower priority (2) and 
 * waits for them to exit. The SchedulerTest01 process does not itself call k_exit().
 *
+* SchedulerTest01: started
+* SchedulerTest01: after spawn of child with pid 3
+* SchedulerTest01: waiting for child process
+* SchedulerTest01-Child1: started
+* SchedulerTest01-Child1: performing spawn of first child
+* SchedulerTest01-Child1: spawn of first child returned pid = 4
+* SchedulerTest01-Child1: performing spawn of second child
+* SchedulerTest01-Child1: spawn of second child returned pid = 5
+* SchedulerTest01-Child1: performing first wait
+* SchedulerTest01-Child1-Child1: started
+* SchedulerTest01-Child1-Child1: quitting
+* SchedulerTest01-Child1: exit status for child 4 is -3
+* SchedulerTest01-Child1: performing second wait
+* SchedulerTest01-Child1-Child2: started
+* SchedulerTest01-Child1-Child2: quitting
+* SchedulerTest01-Child1: exit status for child 5 is -3
+* SchedulerTest01: exit status for child 3 is 1
+* All processes completed.
 *********************************************************************************/
 int SchedulerEntryPoint(void* pArgs)
 {

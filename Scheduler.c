@@ -330,6 +330,10 @@ void k_exit(int code)
     if (me->pParent == NULL)
     {
         enableInterrupts();
+
+        // Print final complete statement
+        console_output(FALSE, "All processes completed.\n");
+
         stop(code);
         return;
     }
