@@ -14,7 +14,7 @@
 
 // DECLARATIONS ////////////////////////////////////////////////////                           
 Process* runningProcess = NULL;
-int debugFlag = 0;                                                              // 0 = no debug output, 1 = debug output
+int debugFlag = 0;                                                          // 0 = no debug output, 1 = debug output
 // END DECLARATIONS ////////////////////////////////////////////////
 
 // FUNCTION PROTOTYPES /////////////////////////////////////////////
@@ -152,12 +152,12 @@ int k_spawn(char* name, int (*entryPoint)(void *), void* arg, int stacksize, int
     /* Find an empty slot in the process table */
     proc_slot = process_find_free_slot();		                    //** ADDED
 //********************************** ADDED
-    if (proc_slot < 0)
-    {
-        console_output(debugFlag, "spawn(): process table is full.\n");
-        enableInterrupts();
-        return -1;
-    }
+    //if (proc_slot < 0)
+    //{
+    //    console_output(debugFlag, "spawn(): process table is full.\n");
+    //    enableInterrupts();
+    //    return -1;
+    //}
 //********************************** ADDED
     pNewProc = &processTable[proc_slot];
 
@@ -260,6 +260,7 @@ int k_wait(int* code)
         Process* prev = NULL;
         Process* dead = process_find_quit_child(runningProcess, &prev);          //** ADDED
 
+		// If dead child found, clean up and return
         if (dead != NULL)
         {
             int pid = dead->pid;
@@ -271,6 +272,7 @@ int k_wait(int* code)
             process_remove_child_link(runningProcess, dead, prev);              //** ADDED
 
             /* reclaim the process table entry */
+            // ********Need to ajust to clean out all process table elements
             processTable[slot].status = PROCSTATE_EMPTY;
             processTable[slot].pid = 0;
             processTable[slot].context = NULL;
@@ -442,7 +444,59 @@ DWORD read_clock()
 
 void display_process_table()
 {
-    // Currently not in use
+    //typedef struct _process
+    //{
+    //    struct			_process* nextReadyProcess;
+    //    struct			_process* nextSiblingProcess;
+    //    struct			_process* pParent;
+    //    struct			_process* pChildren;
+
+    //    char			    name[MAXNAME];					// Process name 
+    //    char			    startArgs[MAXARG];				// Process arguments
+    //    void* context;						            // Process's current context 
+    //    short			    pid;							// Process id (pid) 
+    //    int				priority;
+    //    int				(*entryPoint) (void*);			// The entry point that is called from launch 
+    //    //char*			stack;							// WILL NOT USE THIS - CAN BE REMOVED
+    //    unsigned int	    stacksize;
+    //    int				status;							// READY, QUIT, BLOCKED, etc.
+
+    //    /* WHAT ELSE WILL WE NEED TO TRACK? ADD BELOW */
+
+    //} Process;
+
+    // Print out header pro process table
+    console_output(FALSE, "PID  Parent  Priority    Status  # Kids  CPUtime Name\n");
+
+    // Cycle through process table printing off each row
+    for (int i = 1; i < MAXPROC; i++)
+    {
+        Process* p = &processTable[i];
+
+        // If process state == empty, continue to next row
+        if (p->status == PROCSTATE_EMPTY)
+            continue;
+
+        const char* stateStr = "UNKNOWN";
+        switch (p->status)
+        {
+        case PROCSTATE_READY:     stateStr = "READY";     break;
+        case PROCSTATE_RUNNING:   stateStr = "RUNNING";   break;
+        case PROCSTATE_BLOCKED:   stateStr = "BLOCKED";   break;
+        case PROCSTATE_TERMINATE: stateStr = "TERMINATE"; break;
+        }
+
+        int ppid = (p->pParent != NULL) ? p->pParent->pid : -1;
+
+        console_output(FALSE,"%-5d %-5d %-5d %-10s %-5d %s\n",
+            i,
+            p->pid,
+            ppid,
+            stateStr,
+            p->priority,
+            p->name
+        );
+    }
 }
 
 /**************************************************************************
@@ -506,7 +560,7 @@ static int watchdog(char* dummy)
     while (1)
     {
         check_deadlock();
-        dispatcher();		//** ADDED	 
+        dispatcher();		//POSSIBLY NOT NEEDED HERE
     }
     return 0;
 } 
@@ -528,7 +582,6 @@ static inline void disableInterrupts()
 
 }
 
-//********************************** ADDED	
 // Enables the interrupts
 static inline void enableInterrupts()
 {
@@ -538,7 +591,6 @@ static inline void enableInterrupts()
     psr = psr | PSR_INTERRUPTS;
     set_psr(psr);
 } /* enableInterrupts */
-//********************************** ADDED	
 
 ///////////////////////////////////////////////////////////////////////////
 ///////////////////////  DEBUG CONSOLE FUNCTIONS //////////////////////////

@@ -112,19 +112,19 @@ void process_remove_child_link(Process* parent, Process* child, Process* prev)
 
 /* QUEUE HELPER FUNCTIONS */
 // Adds a process to the ready queue based on its priority.
-void ready_enqueue(Process* p)
+void ready_enqueue(Process* _proc)
 {
-    int pr = p->priority;
-    p->nextReadyProcess = NULL;
+    int addpr = _proc->priority;
+    _proc->nextReadyProcess = NULL;
 
-    if (readyTails[pr] == NULL)
+    if (readyTails[addpr] == NULL)
     {
-        readyHeads[pr] = readyTails[pr] = p;
+        readyHeads[addpr] = readyTails[addpr] = _proc;
     }
     else
     {
-        readyTails[pr]->nextReadyProcess = p;
-        readyTails[pr] = p;
+        readyTails[addpr]->nextReadyProcess = _proc;
+        readyTails[addpr] = _proc;
     }
 }
 
@@ -132,15 +132,15 @@ void ready_enqueue(Process* p)
 // Priority is determined from highest to lowest.
 Process* ready_dequeue_highest(void)
 {
-    for (int pr = HIGHEST_PRIORITY; pr >= LOWEST_PRIORITY; pr--)
+    for (int hipr = HIGHEST_PRIORITY; hipr >= LOWEST_PRIORITY; hipr--)
     {
-        if (readyHeads[pr] != NULL)
+        if (readyHeads[hipr] != NULL)
         {
-            Process* p = readyHeads[pr];
-            readyHeads[pr] = p->nextReadyProcess;
-            if (readyHeads[pr] == NULL) readyTails[pr] = NULL;
-            p->nextReadyProcess = NULL;
-            return p;
+            Process* _procItem = readyHeads[hipr];
+            readyHeads[hipr] = _procItem->nextReadyProcess;
+            if (readyHeads[hipr] == NULL) readyTails[hipr] = NULL;
+            _procItem->nextReadyProcess = NULL;
+            return _procItem;
         }
     }
     return NULL;
