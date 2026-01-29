@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////
+// CYBV 489
+// Dean Lewis
+// Processes.c
+////////////////////////////////////////////////////////////////////
+
 #define _CRT_SECURE_NO_WARNINGS
 #include <string.h>
 
@@ -6,17 +12,18 @@
 #include "Processes.h"
 
 // DECLARATIONS
-Process processTable[MAXPROC];                  // Keep track of processes in OS (MAXPROC is set to 50)
+// Keep track of processes in OS (MAXPROC is set to 50)
+Process processTable[MAXPROC];                  
 int nextPid = 1;
 
-/* Exit code storage (indexed by process table slot) */
+// Exit code storage (indexed by process table slot) 
 int exitCodeSlot[MAXPROC] = { 0 };
 
-/* Ready queues (indexed by priority) */
+// Ready queues (indexed by priority) 
 static Process* readyHeads[HIGHEST_PRIORITY + 1];
 static Process* readyTails[HIGHEST_PRIORITY + 1];
 
-/* PROCESS TABLE INITIALIZATION */
+///// PROCESS TABLE INITIALIZATION /////
 // Instantiate each process in the procTable (1 - MAXPROC)
 // These could be done on demand but easier to make sure we have a clean set when a new process is created.
 void processes_init(void)
@@ -48,7 +55,7 @@ void processes_init(void)
     }
 }
 
-/* PROCESS TABLE HELPERS  */
+///// PROCESS TABLE HELPER FUNCTIONS  /////
 // Finds an unused entry in the process table to allocate for a new process.
 int process_find_free_slot(void)
 {
@@ -61,7 +68,7 @@ int process_find_free_slot(void)
 }
 
 // Searches the process table for a process by pid
-Process* process_find_by_pid(int pid)
+Process* find_process_by_pid(int pid)
 {
     for (int i = 1; i < MAXPROC; i++)
     {
@@ -81,7 +88,7 @@ void process_add_child(Process* parent, Process* child)
 }
 
 // Searches a parent process's child list for a child that has terminated
-Process* process_find_quit_child(Process* parent, Process** pPrevOut)
+Process* process_find_term_child(Process* parent, Process** pPrevOut)
 {
     Process* prev = NULL;
     Process* cur = parent->pChildren;
@@ -102,7 +109,7 @@ Process* process_find_quit_child(Process* parent, Process** pPrevOut)
 }
 
 // Removes a child process from its parent's list of children.
-void process_remove_child_link(Process* parent, Process* child, Process* prev)
+void remove_term_child(Process* parent, Process* child, Process* prev)
 {
     if (prev == NULL) parent->pChildren = child->nextSiblingProcess;
     else prev->nextSiblingProcess = child->nextSiblingProcess;
@@ -111,34 +118,34 @@ void process_remove_child_link(Process* parent, Process* child, Process* prev)
 }
 
 /* QUEUE HELPER FUNCTIONS */
-// Adds a process to the ready queue based on its priority.
-void ready_enqueue(Process* _proc)
+// Adds a process to the ready queue based
+void add_ready_process(Process* _proc)
 {
-    int addpr = _proc->priority;
+    int addready = _proc->priority;
     _proc->nextReadyProcess = NULL;
 
-    if (readyTails[addpr] == NULL)
+    if (readyTails[addready] == NULL)
     {
-        readyHeads[addpr] = readyTails[addpr] = _proc;
+        readyHeads[addready] = readyTails[addready] = _proc;
     }
     else
     {
-        readyTails[addpr]->nextReadyProcess = _proc;
-        readyTails[addpr] = _proc;
+        readyTails[addready]->nextReadyProcess = _proc;
+        readyTails[addready] = _proc;
     }
 }
 
 // Selects and removes the highest priority READY process from the ready queues. 
 // Priority is determined from highest to lowest.
-Process* ready_dequeue_highest(void)
+Process* next_ready_process(void)
 {
-    for (int hipr = HIGHEST_PRIORITY; hipr >= LOWEST_PRIORITY; hipr--)
+    for (int highpri = HIGHEST_PRIORITY; highpri >= LOWEST_PRIORITY; highpri--)
     {
-        if (readyHeads[hipr] != NULL)
+        if (readyHeads[highpri] != NULL)
         {
-            Process* _procItem = readyHeads[hipr];
-            readyHeads[hipr] = _procItem->nextReadyProcess;
-            if (readyHeads[hipr] == NULL) readyTails[hipr] = NULL;
+            Process* _procItem = readyHeads[highpri];
+            readyHeads[highpri] = _procItem->nextReadyProcess;
+            if (readyHeads[highpri] == NULL) readyTails[highpri] = NULL;
             _procItem->nextReadyProcess = NULL;
             return _procItem;
         }
