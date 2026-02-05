@@ -50,6 +50,7 @@ extern int exitCodeSlot[MAXPROC];
 Process* find_process_by_pid(int pid);
 Process* process_find_term_child(Process* parent, Process** pPrevOut);
 Process* next_ready_process(void);
+Process* find_child(Process* parent, int pid, Process** pPrevOut);
 void processes_init(void);
 int process_find_free_slot(void);
 void process_add_child(Process* parent, Process* child);

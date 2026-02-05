@@ -146,18 +146,45 @@ void add_ready_process(Process* _proc)
 // Priority is determined from highest to lowest.
 Process* next_ready_process(void)
 {
-    for (int highpri = HIGHEST_PRIORITY; highpri >= LOWEST_PRIORITY; highpri--)
+    // Test06 - Correct pop READY
+    for (int pri = HIGHEST_PRIORITY; pri >= LOWEST_PRIORITY; pri--)
     {
-        if (readyHeads[highpri] != NULL)
+        while (readyHeads[pri] != NULL)
         {
-            Process* _procItem = readyHeads[highpri];
-            readyHeads[highpri] = _procItem->nextReadyProcess;
-            if (readyHeads[highpri] == NULL) readyTails[highpri] = NULL;
-            _procItem->nextReadyProcess = NULL;
-            return _procItem;
+            Process* p = readyHeads[pri];
+            readyHeads[pri] = p->nextReadyProcess;
+            if (readyHeads[pri] == NULL)
+                readyTails[pri] = NULL;
+
+            p->nextReadyProcess = NULL;
+
+            // Only schedule READY processes.
+            if (p->status == PROCSTATE_READY)
+                return p;
         }
     }
     return NULL;
 }
 
+// Searches for a parents child by PID in process table
+// Added in Test06 to locate the exact child being joined.
+Process* find_child(Process* parent, int pid, Process** pPrevOut)
+{
+    Process* prev = NULL;
+    Process* cur = parent->pChildren;
+
+    while (cur != NULL)
+    {
+        if (cur->pid == pid)
+        {
+            if (pPrevOut) *pPrevOut = prev;
+            return cur;
+        }
+        prev = cur;
+        cur = cur->nextSiblingProcess;
+    }
+
+    if (pPrevOut) *pPrevOut = NULL;
+    return NULL;
+}
 

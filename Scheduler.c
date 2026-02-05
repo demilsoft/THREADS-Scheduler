@@ -18,6 +18,7 @@
 // DECLARATIONS ////////////////////////////////////////////////////                           
 Process* runningProcess = NULL;
 int debugFlag = 0;  // 0 = no debug output, 1 = debug output
+#define TIME_SLICE_MS 80
 // END DECLARATIONS ////////////////////////////////////////////////
 
 // FUNCTION PROTOTYPES /////////////////////////////////////////////
@@ -28,7 +29,8 @@ static void check_deadlock();
 static void DebugConsole(char* format, ...);
 static inline void disableInterrupts();
 static inline void enableInterrupts();
-//**** NEED FUNCTION TO TEST IF IN KERNEL MODE ****//
+static void timer_interrupt_handler(char deviceId[32], uint8_t command, uint32_t status);
+static void require_kernel_mode(void);
 // END FUNCTION  PROTOTYPES ////////////////////////////////////////
 
 ///* DO NOT REMOVE FOLLOWING *//////////////////////////////////////
@@ -36,6 +38,7 @@ extern int SchedulerEntryPoint(void* pArgs);
 int check_io_scheduler();
 check_io_function check_io;
 ////////////////////////////////////////////////////////////////////
+
 
 /*************************************************************************
    bootstrap()
@@ -69,6 +72,21 @@ int bootstrap(void* pArgs)
 
     // Initialize ProcessTable. Moved to Processes.c
     processes_init();
+
+    // Test05 Add
+    //////////// INTERRUPT HANDLER ///////////
+    // Invoke Interrupt Handler Timer
+    interrupt_handler_t* handlers = get_interrupt_handlers();
+
+    // Set all interrupt handlers to NULL
+    for (int i = 0; i < THREADS_INTERRUPT_HANDLER_COUNT; i++)
+    {
+        handlers[i] = NULL;
+    }
+
+    // Set ONLY the timer interrupt handler
+    handlers[THREADS_TIMER_INTERRUPT] = timer_interrupt_handler;
+    //////////////////////////////////////////
 
     // SPAWN watchdog process
     result = k_spawn("watchdog", watchdog, NULL, THREADS_MIN_STACK_SIZE, LOWEST_PRIORITY);
@@ -113,92 +131,120 @@ int bootstrap(void* pArgs)
 ************************************************************************ */
 int k_spawn(char* name, int (*entryPoint)(void*), void* arg, int stacksize, int priority)
 {
-    int proc_slot;
-    struct _process* pNewProc;
+    // Test kernel mode
+    // Test11 Add
+    require_kernel_mode();
 
-    // Debug output
-    DebugConsole("spawn(): creating process %s\n", name);
+    Process* pNewProc = NULL;
+
+    DebugConsole("spawn(): creating process %s\n", (name ? name : "(null)"));
 
     disableInterrupts();
 
-    ////////////  SAFETY CHECKS /////////////
+    //////////// SAFETY CHECKS ////////////
     if (name == NULL)
     {
         console_output(debugFlag, "spawn(): Name value is NULL.\n");
         enableInterrupts();
         return -1;
     }
-    // Name too long
+
     if (strlen(name) >= (MAXNAME - 1))
     {
-        console_output(debugFlag, "spawn(): Process name is too long.  Halting...\n");
-        stop(1);
+        console_output(debugFlag, "spawn(): Process name is too long. Halting...\n");
+        enableInterrupts();
+        return -1; 
     }
-    // NULL entry point
+
     if (entryPoint == NULL)
     {
         console_output(debugFlag, "spawn(): entryPoint is NULL.\n");
         enableInterrupts();
         return -1;
     }
-    // out of bounds pririty value
+
     if (priority < LOWEST_PRIORITY || priority > HIGHEST_PRIORITY)
     {
         console_output(debugFlag, "spawn(): invalid priority value %d.\n", priority);
         enableInterrupts();
         return -1;
     }
-    // Stack size minimum
+
     if (stacksize < THREADS_MIN_STACK_SIZE)
     {
         console_output(debugFlag, "spawn(): stacksize too small.\n");
         enableInterrupts();
         return -1;
     }
-    ////////////  SAFETY CHECKS /////////////
+    //////////// SAFETY CHECKS ////////////
 
-    // Find an empty slot in the process table 
-    proc_slot = process_find_free_slot();
+    //////////// PID/SLOT ALLOCATION (Professor rule) ////////////
+    // Find a PID such that pid % MAXPROC refers to an EMPTY process table slot.
+    int slot = -1;
+    int attempts = 0;
 
-    // Set new process slot
-    pNewProc = &processTable[proc_slot];
+    while (attempts < MAXPROC * 4)  // simple safety bound against infinite loops
+    {
+        int candidateSlot = nextPid % MAXPROC;
 
-    /* Setup the entry in the process table. */
+        // Slot is free?
+        if (processTable[candidateSlot].status == PROCSTATE_EMPTY)
+        {
+            slot = candidateSlot;
+            break;
+        }
+
+        nextPid++;
+        attempts++;
+    }
+
+    // No slot available => process table full
+    if (slot < 0)
+    {
+        enableInterrupts();
+        return -1; // or a more specific "no more processes" code if your spec defines it
+    }
+
+    pNewProc = &processTable[slot];
+
+    // Initialize the process table entry
     memset(pNewProc, 0, sizeof(Process));
     strcpy(pNewProc->name, name);
 
+    // Assign PID that maps to the slot
+    pNewProc->pid = nextPid;
+    nextPid++;  // move to the next candidate for the next spawn
+
     // Save process initial base values
-    pNewProc->pid = nextPid++;
     pNewProc->priority = priority;
     pNewProc->entryPoint = entryPoint;
     pNewProc->status = PROCSTATE_READY;
     pNewProc->stacksize = (unsigned int)stacksize;
 
-    // If there is a parent process, add this to the list of children.
+    // Parent/child process management
     if (runningProcess != NULL)
     {
         process_add_child(runningProcess, pNewProc);
         runningProcess->numChildren++;
     }
 
-    // Debug testing args value
-    DebugConsole("k_spawn(): pid=%d name='%s' argPtr=%p argStr='%s'\n", pNewProc->pid, pNewProc->name, arg, (arg ? (char*)arg : "(null)"));
+    DebugConsole("k_spawn(): pid=%d slot=%d name='%s' argPtr=%p argStr='%s'\n",
+        pNewProc->pid, slot, pNewProc->name, arg, (arg ? (char*)arg : "(null)"));
 
-    // Initialize context for this process, but use launch function pointer for
-    // the initial value of the process's program counter (PC) 
+    // Initialize context
     pNewProc->context = context_initialize(launch, stacksize, arg);
 
-    // Add the process to the ready list.
+    // Add to ready queue
     add_ready_process(pNewProc);
 
-    // Determine if new process is higher priority
-    int ishigher = (runningProcess != NULL) && (runningProcess->status == PROCSTATE_RUNNING) &&
+    // Preempt if new process is higher priority than currently running
+    int preempt = (runningProcess != NULL) &&
+        (runningProcess->status == PROCSTATE_RUNNING) &&
         (pNewProc->priority > runningProcess->priority);
 
     enableInterrupts();
 
-    // If new proc is higher priority, dispatch now
-    if (ishigher)
+    if (preempt)
     {
         dispatcher();
     }
@@ -251,6 +297,10 @@ static int launch(void* args)
 ************************************************************************ */
 int k_wait(int* code)
 {
+    // Test kernel mode
+    // Test11 Add
+    require_kernel_mode();
+
     disableInterrupts();
 
     // check if current process is null and return -4
@@ -271,34 +321,41 @@ int k_wait(int* code)
     while (1)
     {
         Process* prev = NULL;
-        // Check for terminated child
+
+        // See if any child has already terminated
         Process* termchild = process_find_term_child(runningProcess, &prev);
 
-        // If dead child found, clean up and return
         if (termchild != NULL)
         {
             int pid = termchild->pid;
             int slot = (int)(termchild - processTable);
 
-            if (code) *code = exitCodeSlot[slot];
+            if (code)
+                *code = exitCodeSlot[slot];
 
-            /* remove from parent's child list */
+            // Remove from parent's child list
             remove_term_child(runningProcess, termchild, prev);
 
-            /* reclaim the process table entry */
-            // ********Need to adjust to clean out all process table elements********* //
+            // Reclaim the process table entry (so old PIDs don't linger into later dumps)
+            memset(&processTable[slot], 0, sizeof(Process));
             processTable[slot].status = PROCSTATE_EMPTY;
-            processTable[slot].pid = 0;
-            processTable[slot].context = NULL;
+
             exitCodeSlot[slot] = 0;
 
             enableInterrupts();
             return pid;
         }
 
+        // No terminated child yet
+        runningProcess->status = PROCSTATE_BLOCKED;
+
         enableInterrupts();
         dispatcher();
         disableInterrupts();
+
+        // When we resume here, we are running again
+        if (runningProcess != NULL)
+            runningProcess->status = PROCSTATE_RUNNING;
     }
 }
 
@@ -315,6 +372,10 @@ int k_wait(int* code)
 *************************************************************************/
 void k_exit(int exitcode)
 {
+    // Test kernel mode
+    // Test11 Add
+    require_kernel_mode();
+
     disableInterrupts();
 
     Process* _proclocal = runningProcess;
@@ -353,6 +414,7 @@ void k_exit(int exitcode)
 
     int mySlot = (int)(_proclocal - processTable);
 
+    // Test03 Add
     if (_proclocal->receivedSignal)
     {
         exitCodeSlot[mySlot] = -5;  // Kill exit code
@@ -403,6 +465,10 @@ void k_exit(int exitcode)
 *************************************************************************/
 int k_kill(int pid, int signal)
 {
+    // Test kernel mode
+    // Test11 Add
+    require_kernel_mode();
+
     int result = 0;
 
     disableInterrupts();
@@ -415,9 +481,19 @@ int k_kill(int pid, int signal)
         return 0;
     }
 
+    // Check is signal received
     if (signal == SIG_TERM)
     {
+        // Set process table signal to true
         _proclocal->receivedSignal = 1;
+
+        // Test06 Add
+        // Check blocked and move to ready
+        if (_proclocal->status == PROCSTATE_BLOCKED)
+        {
+            _proclocal->status = PROCSTATE_READY;
+            add_ready_process(_proclocal);
+        }
     }
 
     /* Minimal for now; scheduler tests later will define behavior. */
@@ -587,11 +663,112 @@ int k_getpid()
 ***************************************************************************/
 int k_join(int pid, int* pChildExitCode)
 {
-    // Currently not in use
-    // return 0;
-    // FUTURE TESTS
-    (void)pid;
-    (void)pChildExitCode;
+    // Test kernel mode
+    // Test11 Add
+    require_kernel_mode();
+
+    disableInterrupts();
+
+    if (runningProcess == NULL)
+    {
+        enableInterrupts();
+        return -1;
+    }
+
+    // Test10: joining parent is fatal
+    if (runningProcess->pParent != NULL && runningProcess->pParent->pid == pid)
+    {
+        enableInterrupts();
+        console_output(FALSE, "join: process attempted to join parent.\n");
+        stop(2);
+        return -2; // unreachable
+    }
+
+    // Must be my child
+    Process* prev = NULL;
+    Process* child = find_child(runningProcess, pid, &prev);
+    if (child == NULL)
+    {
+        enableInterrupts();
+        return -1;
+    }
+
+    while (1)
+    {
+        if (child->status == PROCSTATE_TERMINATE)
+        {
+            int slot = (int)(child - processTable);
+
+            if (pChildExitCode)
+                *pChildExitCode = exitCodeSlot[slot];
+
+            // IMPORTANT: Do NOT remove child from list, and do NOT reclaim here.
+            // k_wait() is responsible for harvesting/reclaiming terminated children.
+
+            enableInterrupts();
+            return pid;
+        }
+
+        // Not done yet: block and yield
+        runningProcess->status = PROCSTATE_BLOCKED;
+        enableInterrupts();
+        dispatcher();
+        disableInterrupts();
+
+        // We are running again; refresh our child pointer (list might have changed)
+        runningProcess->status = PROCSTATE_RUNNING;
+        prev = NULL;
+        child = find_child(runningProcess, pid, &prev);
+        if (child == NULL)
+        {
+            enableInterrupts();
+            return -1;
+        }
+    }
+}
+
+/**************************************************************************
+    Name - timer_interrupt_handler
+    Interrupt Timer Handler Function - Added Test05
+***************************************************************************/
+static void timer_interrupt_handler(char deviceId[32], uint8_t command, uint32_t status)
+{
+    (void)deviceId;
+    (void)command;
+    (void)status;
+
+    disableInterrupts();
+
+    // Only preempt a real running process
+    if (runningProcess != NULL && runningProcess->status == PROCSTATE_RUNNING)
+    {
+        // If signaled exit handler
+        if (runningProcess != NULL && runningProcess->status == PROCSTATE_RUNNING && runningProcess->receivedSignal)
+        {
+            enableInterrupts();
+            k_exit(-5);
+            return;
+        }
+
+        // Optional: don't timeslice watchdog (usually fine either way)
+        if (strcmp(runningProcess->name, "watchdog") != 0)
+        {
+            DWORD now = read_clock();  // your wrapper around system_clock()
+
+            if ((now - runningProcess->lastStartTime) >= TIME_SLICE_MS)
+            {
+                // Rotate current process to end of its ready queue
+                runningProcess->status = PROCSTATE_READY;
+                add_ready_process(runningProcess);
+
+                // Pick and run the next READY process (same priority RR, or higher if exists)
+                dispatcher();  // context_switch happens inside
+                return;
+            }
+        }
+    }
+
+    enableInterrupts();
 }
 
 /**************************************************************************
@@ -650,6 +827,26 @@ static void check_deadlock()
     // Currently not in use
 }
 
+/*************************************************************************
+   Name - require_kernel_mode
+*************************************************************************/
+static void require_kernel_mode(void)
+{
+    // Test kernel mode prior to action. If fail stop(1)
+    uint32_t psr = get_psr();
+    if ((psr & PSR_KERNEL_MODE) == 0)
+    {
+        console_output(FALSE, "Kernel mode expected, but function called in user mode.\n");
+        stop(1); // prints "THREADS Halted: Error code 1."
+    }
+}
+
+/* there is no I/O yet, so return false. */
+int check_io_scheduler()
+{
+    return false;
+}
+
 ///////////////////////////////////////////////////////////////////////////
 ///////////////////////  DEBUG CONSOLE FUNCTIONS //////////////////////////
 /**************************************************************************
@@ -674,9 +871,4 @@ static void DebugConsole(char* format, ...)
     }
 }
 
-/* there is no I/O yet, so return false. */
-int check_io_scheduler()
-{
-    return false;
-}
 ///////////////////////////////////////////////////////////////////////////
