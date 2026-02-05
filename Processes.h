@@ -1,5 +1,6 @@
 ////////////////////////////////////////////////////////////////////
 // CYBV 489
+// SP 2026
 // Dean Lewis
 // Processes.h
 ////////////////////////////////////////////////////////////////////
@@ -34,9 +35,10 @@ typedef struct _process
 	unsigned int	stacksize;						// likely will not use
 	int				status;							// READY, QUIT, BLOCKED, etc.
 	/* WHAT ELSE WILL WE NEED TO TRACK? ADD BELOW */
-	// int 			cpuTime;                        // Total CPU time used by process		
-	// int 			myExitCode;                     // Exit code when process terminates	
-
+	DWORD 			cpuTime;                        // Total CPU time used by process		
+	int 			numChildren;                    // Number of child processes	
+	DWORD			lastStartTime;					// last process start time
+	int				receivedSignal;					// 0 none, 1 was signaled
 } Process;
 
 extern Process processTable[MAXPROC];
@@ -44,6 +46,7 @@ extern int nextPid;
 extern int exitCodeSlot[MAXPROC];
 
 // FUNCTION PROTOTYPES //
+// SEE FUNCTION DEFINITIONS FOR DESCRIPTIONS //
 Process* find_process_by_pid(int pid);
 Process* process_find_term_child(Process* parent, Process** pPrevOut);
 Process* next_ready_process(void);

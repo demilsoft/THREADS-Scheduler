@@ -1,5 +1,6 @@
 ////////////////////////////////////////////////////////////////////
 // CYBV 489
+// SP 2026
 // Dean Lewis
 // Processes.c
 ////////////////////////////////////////////////////////////////////
@@ -35,15 +36,19 @@ void processes_init(void)
         processTable[i].pParent = NULL;
         processTable[i].pChildren = NULL;
 
-        processTable[i].name[0] = '\0';
-        processTable[i].startArgs[0] = '\0';
+        processTable[i].name[0] = '\0';                 // TERMINATE EMPTY
+        processTable[i].startArgs[0] = '\0';            // TERMINATE EMPTY
         processTable[i].context = NULL;
 
         processTable[i].pid = 0;
         processTable[i].priority = 0;
         processTable[i].entryPoint = NULL;
         processTable[i].stacksize = 0;
-        processTable[i].status = PROCSTATE_EMPTY;
+        processTable[i].status = PROCSTATE_EMPTY;       // O - SEE DECLARATION
+        processTable[i].cpuTime = 0;                       		
+        processTable[i].numChildren = 0;
+        processTable[i].lastStartTime = 0;
+        processTable[i].receivedSignal = 0;
 
         exitCodeSlot[i] = 0;
     }
@@ -59,7 +64,8 @@ void processes_init(void)
 // Finds an unused entry in the process table to allocate for a new process.
 int process_find_free_slot(void)
 {
-    for (int i = 1; i < MAXPROC; i++)   /* leave slot 0 unused */
+
+    for (int i = 0; i < MAXPROC; i++) // CHANGING FROM 1 to 0!!  /////????????/* leave slot 0 unused */?????????/////
     {
         if (processTable[i].status == PROCSTATE_EMPTY)
             return i;
@@ -115,6 +121,7 @@ void remove_term_child(Process* parent, Process* child, Process* prev)
     else prev->nextSiblingProcess = child->nextSiblingProcess;
 
     child->nextSiblingProcess = NULL;
+	parent->numChildren--;
 }
 
 /* QUEUE HELPER FUNCTIONS */
@@ -152,3 +159,5 @@ Process* next_ready_process(void)
     }
     return NULL;
 }
+
+
