@@ -315,8 +315,9 @@ int k_wait(int* code)
         return -4;
     }
 
-    /* block until a child quits */
+    /* block until a child quits  Test13 Add */
     runningProcess->status = PROCSTATE_BLOCKED;
+    runningProcess->blockReason = BLOCK_WAIT;
 
     while (1)
     {
@@ -337,17 +338,21 @@ int k_wait(int* code)
             remove_term_child(runningProcess, termchild, prev);
 
             // Reclaim the process table entry (so old PIDs don't linger into later dumps)
-            memset(&processTable[slot], 0, sizeof(Process));
+            // memset(&processTable[slot], 0, sizeof(Process));
+            // Changed for Test06 and Test15
             processTable[slot].status = PROCSTATE_EMPTY;
-
-            exitCodeSlot[slot] = 0;
+            processTable[slot].context = NULL;     // optional
+            processTable[slot].pChildren = NULL;   // optional
+            processTable[slot].pParent = NULL;     // optional
+            // exitCodeSlot[slot] = 0;
 
             enableInterrupts();
             return pid;
         }
 
-        // No terminated child yet
+        // Set block status and WAIT type Test13 Add
         runningProcess->status = PROCSTATE_BLOCKED;
+        runningProcess->blockReason = BLOCK_WAIT;
 
         enableInterrupts();
         dispatcher();
@@ -429,6 +434,20 @@ void k_exit(int exitcode)
     _proclocal->cpuTime += (now - _proclocal->lastStartTime);
 
     _proclocal->status = PROCSTATE_TERMINATE;
+
+    // Wake any processes blocked on JOIN Test15 Add
+    for (int i = 0; i < MAXPROC; i++)
+    {
+        Process* p = &processTable[i];
+
+        if (p->status == PROCSTATE_BLOCKED && p->blockReason == BLOCK_JOIN && p->blockedPid == _proclocal->pid)
+        {
+            p->status = PROCSTATE_READY;
+            p->blockReason = BLOCK_NONE;
+            p->blockedPid = 0;
+            add_ready_process(p);
+        }
+    }
 
     /* Wake parent if it is waiting */
     if (_proclocal->pParent != NULL && _proclocal->pParent->status == PROCSTATE_BLOCKED)
@@ -548,9 +567,10 @@ void dispatcher()
         runningProcess->cpuTime += (now - runningProcess->lastStartTime);
     }
 
-    // Switch to the next process
+    // Switch to the next process and block reason
     runningProcess = nextProcess;
     runningProcess->status = PROCSTATE_RUNNING;
+    runningProcess->blockReason = BLOCK_NONE;
 
     // start cpu running clock time
     runningProcess->lastStartTime = read_clock();
@@ -629,7 +649,13 @@ void display_process_table()
         {
         case PROCSTATE_READY:     stateStr = "READY";     break;
         case PROCSTATE_RUNNING:   stateStr = "RUNNING";   break;
-        case PROCSTATE_BLOCKED:   stateStr = "BLOCKED";   break;
+        //case PROCSTATE_BLOCKED:   stateStr = "BLOCKED";   break;
+        // Alter output display for blocked status showing reason Test13 Add
+        case PROCSTATE_BLOCKED:
+            if (_proclocal->blockReason == BLOCK_WAIT) stateStr = "WAIT BLOCK";
+            else if (_proclocal->blockReason == BLOCK_JOIN) stateStr = "JOIN BLOCK";
+            else stateStr = "BLOCKED";
+            break;
         case PROCSTATE_TERMINATE: stateStr = "TERMINATE"; break;
         }
 
@@ -663,8 +689,7 @@ int k_getpid()
 ***************************************************************************/
 int k_join(int pid, int* pChildExitCode)
 {
-    // Test kernel mode
-    // Test11 Add
+    // Kernel mode validation Test11 Add
     require_kernel_mode();
 
     disableInterrupts();
@@ -675,55 +700,63 @@ int k_join(int pid, int* pChildExitCode)
         return -1;
     }
 
-    // Test10: joining parent is fatal
-    if (runningProcess->pParent != NULL && runningProcess->pParent->pid == pid)
-    {
-        enableInterrupts();
-        console_output(FALSE, "join: process attempted to join parent.\n");
-        stop(2);
-        return -2; // unreachable
-    }
-
-    // Must be my child
-    Process* prev = NULL;
-    Process* child = find_child(runningProcess, pid, &prev);
-    if (child == NULL)
+    // Joining yourself is invalid safety check
+    if (pid == runningProcess->pid)
     {
         enableInterrupts();
         return -1;
     }
 
+    // joining parent is fatal Test10 Add
+    if (runningProcess->pParent != NULL && runningProcess->pParent->pid == pid)
+    {
+        enableInterrupts();
+        console_output(FALSE, "join: process attempted to join parent.\n");
+        stop(2); // does not return
+    }
+
+    // Enforce PID->slot mapping rule (Professor requirement, Test04/Test15 impact)
+    // pid % MAXPROC must refer to the process's position in the process table.
+    int slot = pid % MAXPROC;
+
     while (1)
     {
-        if (child->status == PROCSTATE_TERMINATE)
+        // join is by PID Test13 Add
+        // IMPORTANT: we validate the mapping using the pid stored in the slot,
+        // because the target may already be reaped by k_wait() (Test15 case).
+        if (processTable[slot].pid != pid)
         {
-            int slot = (int)(child - processTable);
+            // If pid doesn't exist fail safety check
+            enableInterrupts();
+            return -1;
+        }
 
-            if (pChildExitCode)
+        // If target has terminated OR has been reaped (EMPTY), return exit code immediately
+        // Test15 Add: join must still succeed even if another process already waited/reaped it
+        if (processTable[slot].status == PROCSTATE_TERMINATE ||
+            processTable[slot].status == PROCSTATE_EMPTY)
+        {
+            if (pChildExitCode != NULL)
                 *pChildExitCode = exitCodeSlot[slot];
 
-            // IMPORTANT: Do NOT remove child from list, and do NOT reclaim here.
-            // k_wait() is responsible for harvesting/reclaiming terminated children.
+            // clear block join and tag Test15 Add
+            runningProcess->blockedPid = 0;
+            runningProcess->blockReason = BLOCK_NONE;
 
             enableInterrupts();
             return pid;
         }
 
-        // Not done yet: block and yield
+        // Otherwise block on JOIN
         runningProcess->status = PROCSTATE_BLOCKED;
+        runningProcess->blockReason = BLOCK_JOIN; // Test13 Add
+        runningProcess->blockedPid = pid; // Test15 Add tag bock by JOIN
+
         enableInterrupts();
         dispatcher();
         disableInterrupts();
 
-        // We are running again; refresh our child pointer (list might have changed)
-        runningProcess->status = PROCSTATE_RUNNING;
-        prev = NULL;
-        child = find_child(runningProcess, pid, &prev);
-        if (child == NULL)
-        {
-            enableInterrupts();
-            return -1;
-        }
+        // loop and re-check target
     }
 }
 

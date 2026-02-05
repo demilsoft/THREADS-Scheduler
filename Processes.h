@@ -15,16 +15,22 @@
 #define PROCSTATE_BLOCKED     3
 #define PROCSTATE_TERMINATE   4
 
+// Adding typedef to handle multiple block types
+typedef enum
+{
+	BLOCK_NONE = 0,
+	BLOCK_WAIT,
+	BLOCK_JOIN
+} block_reason_t;
+
 typedef struct _process
 {
 	struct			_process* nextReadyProcess;
 	struct			_process* nextSiblingProcess;
 	struct			_process* pParent;
 	struct			_process* pChildren;
-
 	// struct			_process* pActiveChildren;			// Likely wont need this...addressing in k_wait
 	// struct			_process* pChildrenThatExited;		// Likely wont need this...addressing in k_wait
-
 	char			name[MAXNAME];					// Process name 
 	char			startArgs[MAXARG];				// Process arguments
 	void*			context;						// Process's current context 
@@ -34,11 +40,13 @@ typedef struct _process
 	//char*			stack;							// NOT IN USE
 	unsigned int	stacksize;						// likely will not use
 	int				status;							// READY, QUIT, BLOCKED, etc.
-	/* WHAT ELSE WILL WE NEED TO TRACK? ADD BELOW */
-	DWORD 			cpuTime;                        // Total CPU time used by process		
+
+	DWORD 			cpuTime;                        // Total CPU time used by process	
+	DWORD			lastStartTime;					// last process start time	
 	int 			numChildren;                    // Number of child processes	
-	DWORD			lastStartTime;					// last process start time
 	int				receivedSignal;					// 0 none, 1 was signaled
+	block_reason_t  blockReason;					// Handles BLOCK TYPE
+	int				blockedPid;						// pid this process is blocked (JOIN)
 } Process;
 
 extern Process processTable[MAXPROC];

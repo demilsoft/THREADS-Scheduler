@@ -39,16 +39,18 @@ void processes_init(void)
         processTable[i].name[0] = '\0';                 // TERMINATE EMPTY
         processTable[i].startArgs[0] = '\0';            // TERMINATE EMPTY
         processTable[i].context = NULL;
-
         processTable[i].pid = 0;
         processTable[i].priority = 0;
         processTable[i].entryPoint = NULL;
         processTable[i].stacksize = 0;
+
         processTable[i].status = PROCSTATE_EMPTY;       // O - SEE DECLARATION
         processTable[i].cpuTime = 0;                       		
         processTable[i].numChildren = 0;
         processTable[i].lastStartTime = 0;
         processTable[i].receivedSignal = 0;
+        processTable[i].blockReason = BLOCK_NONE;
+        processTable[i].blockedPid = 0;
 
         exitCodeSlot[i] = 0;
     }
