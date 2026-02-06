@@ -4,6 +4,7 @@
 // Dean Lewis
 // Processes.h
 ////////////////////////////////////////////////////////////////////
+
 #pragma once
 #include "THREADSLib.h"
 #include "Scheduler.h" 
@@ -23,17 +24,32 @@ typedef enum
 	BLOCK_JOIN
 } block_reason_t;
 
+/*
+ * Forward declare Process so ksem_t can reference Process* before
+ * the full struct _process is defined.
+ */
+typedef struct _process Process;
+
+// Adding race logic to utilize a semaphore Test16 Add
+typedef struct
+{
+	int count;                        // for an event, 0/1
+	Process* waiters;                 // head of blocked queue
+	Process* waitersTail;             // tail of blocked queue  // Test17 Add
+} ksem_t;
+
 typedef struct _process
 {
 	struct			_process* nextReadyProcess;
 	struct			_process* nextSiblingProcess;
 	struct			_process* pParent;
 	struct			_process* pChildren;
+	struct			_process* nextBlocked;			// Semaphore wait queue Test 15 Add
 	// struct			_process* pActiveChildren;			// Likely wont need this...addressing in k_wait
 	// struct			_process* pChildrenThatExited;		// Likely wont need this...addressing in k_wait
 	char			name[MAXNAME];					// Process name 
 	char			startArgs[MAXARG];				// Process arguments
-	void*			context;						// Process's current context 
+	void* context;						// Process's current context 
 	short			pid;							// Process id (pid) 
 	int				priority;
 	int				(*entryPoint) (void*);			// The entry point that is called from launch 
@@ -47,6 +63,8 @@ typedef struct _process
 	int				receivedSignal;					// 0 none, 1 was signaled
 	block_reason_t  blockReason;					// Handles BLOCK TYPE
 	int				blockedPid;						// pid this process is blocked (JOIN)
+	//ksem_t			joinSem;						// signaled when this process exits
+	//int				exited;							// boolean: set to 1 when terminated (optional but helpful)
 } Process;
 
 extern Process processTable[MAXPROC];
@@ -64,3 +82,5 @@ int process_find_free_slot(void);
 void process_add_child(Process* parent, Process* child);
 void remove_term_child(Process* parent, Process* child, Process* prev);
 void add_ready_process(Process* p);
+int ready_queue_has_process(int pri);
+

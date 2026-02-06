@@ -53,6 +53,11 @@ void processes_init(void)
         processTable[i].blockedPid = 0;
 
         exitCodeSlot[i] = 0;
+
+		//processTable[i].joinSem.count = 0;              // Added for semaphore logic in Test15
+  //      processTable[i].joinSem.waiters = NULL;
+  //      processTable[i].exited = 0;
+        processTable[i].nextBlocked = NULL;
     }
 
     for (int p = 0; p <= HIGHEST_PRIORITY; p++)
@@ -78,7 +83,8 @@ int process_find_free_slot(void)
 // Searches the process table for a process by pid
 Process* find_process_by_pid(int pid)
 {
-    for (int i = 1; i < MAXPROC; i++)
+    //for (int i = 1; i < MAXPROC; i++)
+	for (int i = 0; i < MAXPROC; i++)  // CHANGING FROM 1 to 0!! Test19 Alter
     {
         if (processTable[i].status != PROCSTATE_EMPTY && processTable[i].pid == pid)
             return &processTable[i];
@@ -90,9 +96,24 @@ Process* find_process_by_pid(int pid)
 // Adds a child process to a parent process's list of children
 void process_add_child(Process* parent, Process* child)
 {
+	// Test17 Change ordering logic to FIFO - append to tail instead of head
     child->pParent = parent;
-    child->nextSiblingProcess = parent->pChildren;
-    parent->pChildren = child;
+    child->nextSiblingProcess = NULL;
+
+    // If no children yet, child becomes head
+    if (parent->pChildren == NULL)
+    {
+        parent->pChildren = child;
+        return;
+    }
+
+    // Otherwise, append to tail to preserve spawn order (FIFO)
+    Process* cur = parent->pChildren;
+    while (cur->nextSiblingProcess != NULL)
+    {
+        cur = cur->nextSiblingProcess;
+    }
+    cur->nextSiblingProcess = child;
 }
 
 // Searches a parent process's child list for a child that has terminated
@@ -190,3 +211,8 @@ Process* find_child(Process* parent, int pid, Process** pPrevOut)
     return NULL;
 }
 
+// Test19 Add - Check if ready queue has process at priority to switch to
+int ready_queue_has_process(int pri)
+{
+    return (pri >= LOWEST_PRIORITY && pri <= HIGHEST_PRIORITY && readyHeads[pri] != NULL);
+}
