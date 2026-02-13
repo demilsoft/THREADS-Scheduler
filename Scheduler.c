@@ -4,6 +4,14 @@
 // Dean Lewis
 // Scheduler.c
 ////////////////////////////////////////////////////////////////////
+// This file implemetns the OS Scheduler functions.  The scheduler is responsible for managing the process table,
+// handling process creation and termination, and performing context switches between processes. 
+// The scheduler maintains a process table, which is an array of Process structs that represent 
+// individual processes in the system. Each Process struct contains information about the process's state, 
+// context, parent-child relationships, and other relevant data. The scheduler provides functions for spawning 
+// new processes, waiting for child processes to terminate, joining with child processes, killing processes, 
+// and exiting processes. It also includes a dispatcher function that performs context switching to the next 
+// ready process based on priority scheduling.
 
 #define _CRT_SECURE_NO_WARNINGS
 // STANDARD LIBRARIES
@@ -17,8 +25,8 @@
 
 // DECLARATIONS ////////////////////////////////////////////////////
 Process* runningProcess = NULL;
-int debugFlag = 0;  // 0 = no debug output, 1 = debug output
-#define TIME_SLICE_MS 250  //BUMPING UP TO EVEN OUT ORDERING
+int debugFlag = 0;          //  0 = no debug output, 1 = debug output
+#define TIME_SLICE_MS 250   //  BUMPING UP TO EVEN OUT ORDERING
 /////////  CPU TIME OUTPUT FIX  //////////
 #define NOW_MS()   ((DWORD)(read_clock() / 1000))  // ADDING TO CONVERT OUTPUT TO milliseconds Fixes Test05, 08
 // END DECLARATIONS ////////////////////////////////////////////////
@@ -36,10 +44,10 @@ static inline void disableInterrupts();
 static inline void enableInterrupts();
 static void timer_interrupt_handler(char deviceId[32], uint8_t command, uint32_t status);
 static void require_kernel_mode(void);
-// Semaphore functions (Test15 Add)
-static void ksem_wait(ksem_t* s);
-static void ksem_broadcast(ksem_t* s);
-static void ksem_init(ksem_t* s, int initialCount);
+// Semaphore functions Test15 Add
+static void semaphore_wait(ksem_t* s);
+static void semaphore_broadcast(ksem_t* s);
+static void semaphore_init(ksem_t* s, int initialCount);
 // END FUNCTION  PROTOTYPES ////////////////////////////////////////
 
 ///* DO NOT REMOVE FOLLOWING *//////////////////////////////////////
@@ -47,7 +55,6 @@ extern int SchedulerEntryPoint(void* pArgs);
 int check_io_scheduler();
 check_io_function check_io;
 ////////////////////////////////////////////////////////////////////
-
 
 /*************************************************************************
    bootstrap()
@@ -73,7 +80,7 @@ check_io_function check_io;
  *************************************************************************/
 int bootstrap(void* pArgs)
 {
-    // value returned by call to spawn()
+    // Value returned by call to spawn()
     int result;
 
     // Set this to the scheduler version of this function.
@@ -86,7 +93,7 @@ int bootstrap(void* pArgs)
     // Initialize join semaphores (one per slot)
     for (int i = 0; i < MAXPROC; i++)
     {
-        ksem_init(&joinSem[i], 0);
+        semaphore_init(&joinSem[i], 0);
     }
 
     // Test05 Add
@@ -105,6 +112,7 @@ int bootstrap(void* pArgs)
     //////////////////////////////////////////
 
     // SPAWN watchdog process
+    // Executes watchdog Entry point
     result = k_spawn("watchdog", watchdog, NULL, THREADS_MIN_STACK_SIZE, LOWEST_PRIORITY);
     if (result < 0)
     {
@@ -113,7 +121,7 @@ int bootstrap(void* pArgs)
     }
 
     // Spawn test parent process, which is the main for each test program.
-    // Executes SchedulerEntryPoint
+    // Executes SchedulerEntryPoint Entry point
     result = k_spawn("Scheduler", SchedulerEntryPoint, NULL, 2 * THREADS_MIN_STACK_SIZE, HIGHEST_PRIORITY);
     if (result < 0)
     {
@@ -153,6 +161,7 @@ int k_spawn(char* name, int (*entryPoint)(void*), void* arg, int stacksize, int 
 
     Process* pNewProc = NULL;
 
+    // Debug print out
     DebugConsole("spawn(): creating process %s\n", (name ? name : "(null)"));
 
     disableInterrupts();
@@ -181,7 +190,6 @@ int k_spawn(char* name, int (*entryPoint)(void*), void* arg, int stacksize, int 
 
     if (priority < LOWEST_PRIORITY || priority > HIGHEST_PRIORITY)
     {
-        //console_output(debugFlag, "spawn(): invalid priority value %d.\n", priority);
         console_output(debugFlag, "spawn(): Priority out of range.\n"); // Test21 Alter
         enableInterrupts();
         return -2;
@@ -231,11 +239,11 @@ int k_spawn(char* name, int (*entryPoint)(void*), void* arg, int stacksize, int 
 
     // Assign PID that maps to the slot
     pNewProc->pid = nextPid;
-    nextPid++;  // move to the next candidate for the next spawn
+    nextPid++;   // move to the next candidate for the next spawn
 
     // Test15 Add
     // Reset the join semaphore for this slot 
-    ksem_init(&joinSem[slot], 0);
+    semaphore_init(&joinSem[slot], 0);
 
     // Save process initial base values
     pNewProc->priority = priority;
@@ -250,8 +258,8 @@ int k_spawn(char* name, int (*entryPoint)(void*), void* arg, int stacksize, int 
         runningProcess->numChildren++;
     }
 
-    DebugConsole("k_spawn(): pid=%d slot=%d name='%s' argPtr=%p argStr='%s'\n",
-        pNewProc->pid, slot, pNewProc->name, arg, (arg ? (char*)arg : "(null)"));
+    // Debug Print
+    DebugConsole("k_spawn(): pid=%d slot=%d name='%s' argPtr=%p argStr='%s'\n", pNewProc->pid, slot, pNewProc->name, arg, (arg ? (char*)arg : "(null)"));
 
     // Initialize context
     pNewProc->context = context_initialize(launch, stacksize, arg);
@@ -259,14 +267,13 @@ int k_spawn(char* name, int (*entryPoint)(void*), void* arg, int stacksize, int 
     // Add to ready queue
     process_add_ready(pNewProc);
 
-    // Preempt if new process is higher priority than currently running
-    int preempt = (runningProcess != NULL) &&
-        (runningProcess->status == PROCSTATE_RUNNING) &&
-        (pNewProc->priority > runningProcess->priority);
+    // If new process is higher priority than currently running
+    int isHigher = (runningProcess != NULL) && (runningProcess->status == PROCSTATE_RUNNING) && (pNewProc->priority > runningProcess->priority);
 
     enableInterrupts();
 
-    if (preempt)
+	// If the new process has higher priority than the currently running process, dispatch to it immediately.
+    if (isHigher)
     {
         dispatcher();
     }
@@ -304,19 +311,6 @@ static int launch(void* args)
     return 0;
 }
 
-/**************************************************************************
-   Name - k_wait
-
-   Purpose - Wait for a child process to quit.  Return right away if
-             a child has already quit.
-
-   Parameters - Output parameter for the child's exit code.
-
-   Returns - the pid of the quitting child, or
-        -4 if the process has no children
-        -5 if the process was signaled in the join
-
-************************************************************************ */
 /**************************************************************************
    Name - k_wait
 
@@ -415,17 +409,6 @@ int k_wait(int* code)
    Returns - nothing
 
 *************************************************************************/
-/**************************************************************************
-   Name - k_exit
-
-   Purpose - Exits a process and coordinates with the parent for cleanup
-             and return of the exit code.
-
-   Parameters - the code to return to the grieving parent
-
-   Returns - nothing
-
-*************************************************************************/
 void k_exit(int exitcode)
 {
     // Test kernel mode
@@ -489,7 +472,7 @@ void k_exit(int exitcode)
 
     // Test15 Add
     // Wake any processes blocked on JOIN (replaces blockedPid scan loop logic)
-    ksem_broadcast(&joinSem[mySlot]);
+    semaphore_broadcast(&joinSem[mySlot]);
 
     /* Wake parent if it is waiting - expanded all secenarios to fix order bug */
     if (_proclocal->pParent != NULL && _proclocal->pParent->status == PROCSTATE_BLOCKED)
@@ -539,7 +522,6 @@ void k_exit(int exitcode)
 *************************************************************************/
 int k_kill(int pid, int signal)
 {
-    // Test kernel mode
     // Test11 Add
     require_kernel_mode();
 
@@ -712,12 +694,12 @@ void display_process_table()
         if (_proclocal->status == PROCSTATE_EMPTY)
             continue;
 
-        //const char* stateStr = "UNKNOWN";
+        // Const char* stateStr = "UNKNOWN";
         switch (_proclocal->status)
         {
         case PROCSTATE_READY:     strcpy(stateBuffer, "READY");     break;
         case PROCSTATE_RUNNING:   strcpy(stateBuffer, "RUNNING");   break;
-            //case PROCSTATE_BLOCKED:   stateStr = "BLOCKED";   break;
+            // Case PROCSTATE_BLOCKED:   stateStr = "BLOCKED";   break;
             // Alter output display for blocked status showing reason - Test13 Add
         case PROCSTATE_BLOCKED:
             if (_proclocal->blockReason == BLOCK_WAIT) strcpy(stateBuffer, "WAIT BLOCK");
@@ -736,7 +718,7 @@ void display_process_table()
             _proclocal->priority,       // Priority
             stateBuffer,                // Status
             _proclocal->numChildren,    // # Kids
-            _proclocal->cpuTime, // CPU Time
+            _proclocal->cpuTime,        // CPU Time
             _proclocal->name            // Name
         );
     }
@@ -842,7 +824,7 @@ int k_join(int pid, int* pChildExitCode)
         // Otherwise block on JOIN (Semaphore-based)
         // Test15 Add: Wait on the target's join semaphore (wakes ALL joiners on exit)
         blockedOnce = 1;
-        ksem_wait(&joinSem[slot]);
+        semaphore_wait(&joinSem[slot]);
 
         // loop and re-check target
     }
@@ -871,7 +853,7 @@ static void timer_interrupt_handler(char deviceId[32], uint8_t command, uint32_t
         }
 
         // Altered Test19 Add
-        //  TESTING 19 COMMENT
+        // TESTING 19 COMMENT
         if (strcmp(runningProcess->name, "watchdog") != 0)
         {
             DWORD now = NOW_MS();
@@ -886,8 +868,9 @@ static void timer_interrupt_handler(char deviceId[32], uint8_t command, uint32_t
                     return;
                 }
 
-                // else: nobody to rotate with; keep running
-                runningProcess->lastStartTime = now; // optional: reset slice accounting
+                // Else nobody to rotate with keep running
+                // Reset slice accounting
+                runningProcess->lastStartTime = now; 
             }
         }
     }
@@ -951,7 +934,7 @@ int block(int code)
     runningProcess->blockReason = code;
 
     enableInterrupts();
-    dispatcher();               // yield CPU until someone unblocks us
+    dispatcher();              
     return 0;
 }
 
@@ -1018,15 +1001,15 @@ int check_io_scheduler()
 
 /////////////////////// SEMAPHORE IMPLEMENTATION Test15 Add //////////////////////////
 // Initialize a semaphore
-static void ksem_init(ksem_t* sem_t, int initialCount)
+static void semaphore_init(ksem_t* sem_t, int initialCount)
 {
     sem_t->count = initialCount;
     sem_t->waiters = NULL;
     sem_t->waitersTail = NULL;  // Test17 Add FIFO
 }
 
-//Wait semaphore Test15 Add
-static void ksem_wait(ksem_t* sem_t)
+// Wait semaphore Test15 Add
+static void semaphore_wait(ksem_t* sem_t)
 {
     // interrupts already disabled by caller
 
@@ -1057,10 +1040,9 @@ static void ksem_wait(ksem_t* sem_t)
 }
 
 // Broadcast (wake ALL waiters Test15 Add
-static void ksem_broadcast(ksem_t* sem_t)
+static void semaphore_broadcast(ksem_t* sem_t)
 {
-    // interrupts already disabled by caller
-
+    // Interrupts already disabled by caller
     Process* _proclocal = sem_t->waiters;
     sem_t->waiters = NULL;
     sem_t->waitersTail = NULL;
@@ -1080,12 +1062,12 @@ static void ksem_broadcast(ksem_t* sem_t)
         _proclocal = next;
     }
 
-    // keep it signaled for late joiners 
+    // Keep it signaled for late joiners 
     sem_t->count = 1;
 }
 
-// checks to see if pid is current use
-static int check_pid_exists(int pid)
+// Checks to see if pid is current use
+static int process_check_pid_exists(int pid)
 {
     for (int i = 0; i < MAXPROC; i++)
     {
@@ -1104,7 +1086,6 @@ static int check_pid_exists(int pid)
    Purpose - Prints  the message to the console_output if in debug mode
    Parameters - format string and va args
    Returns - nothing
-   Side Effects -
 *************************************************************************/
 static void DebugConsole(char* format, ...)
 {
@@ -1120,5 +1101,4 @@ static void DebugConsole(char* format, ...)
 
     }
 }
-
 ///////////////////////////////////////////////////////////////////////////

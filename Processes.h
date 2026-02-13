@@ -4,6 +4,10 @@
 // Dean Lewis
 // Processes.h
 ////////////////////////////////////////////////////////////////////
+// This file defines the Process struct and related helper functions for process management. 
+// The Process struct represents an individual process in the system and contains information about the process's state
+// context, parent-child relationships, and other relevant data. The helper functions provide functionality for initializing
+// the process table, finding free slots for new processes, managing parent-child relationships, and handling ready queues for scheduling.
 
 #pragma once
 #include "THREADSLib.h"
@@ -45,15 +49,12 @@ typedef struct _process
 	struct			_process* pParent;
 	struct			_process* pChildren;
 	struct			_process* nextBlocked;			// Semaphore wait queue Test 15 Add
-	// struct			_process* pActiveChildren;			// Likely wont need this...addressing in k_wait
-	// struct			_process* pChildrenThatExited;		// Likely wont need this...addressing in k_wait
 	char			name[MAXNAME];					// Process name 
 	char			startArgs[MAXARG];				// Process arguments
 	void*			context;						// Process's current context 
 	short			pid;							// Process id (pid) 
 	int				priority;
 	int				(*entryPoint) (void*);			// The entry point that is called from launch 
-	//char*			stack;							// NOT IN USE
 	unsigned int	stacksize;						// likely will not use
 	int				status;							// READY, QUIT, BLOCKED, etc.
 	DWORD 			cpuTime;                        // Total CPU time used by process	
@@ -62,9 +63,6 @@ typedef struct _process
 	int				receivedSignal;					// 0 none, 1 was signaled
 	block_reason_t  blockReason;					// Handles BLOCK TYPE
 	int				blockedPid;						// pid this process is blocked (JOIN)
-	// REMOVED FOLLOWING ON SWITCH TO SEMAPHORE LOGIC
-	//ksem_t			joinSem;					// signaled when this process exits
-	//int				exited;						// boolean: set to 1 when terminated (optional but helpful)
 } Process;
 
 // EXTERNAL FUNCTION DECLARATIONS
@@ -77,12 +75,11 @@ extern int exitCodeSlot[MAXPROC];
 Process* process_find_by_pid(int pid);
 Process* process_find_term_child(Process* parent, Process** pPrevOut);
 Process* process_next_ready(void);
-Process* process_find_child(Process* parent, int pid, Process** pPrevOut);
 void processes_init(void);
 int process_find_free_slot(void);
 void process_add_child(Process* parent, Process* child);
 void process_remove_term_child(Process* parent, Process* child, Process* prev);
 void process_add_ready(Process* p);
 int process_in_ready_queue(int pri);
-int check_pid_exists(int pid);
+int process_check_pid_exists(int pid);
 

@@ -4,6 +4,14 @@
 // Dean Lewis
 // Processes.c
 ////////////////////////////////////////////////////////////////////
+// This file implements the process table and related helper functions for process management. 
+// The process table is a fixed-size array of Process structs, 
+// which represent individual processes in the system. Each Process struct contains 
+// information about the process's state, context, parent-child relationships, 
+// and other relevant data. The helper functions provide functionality for initializing 
+// the process table, finding free slots for new processes, managing parent-child relationships, 
+// and handling ready queues for scheduling.
+
 
 #define _CRT_SECURE_NO_WARNINGS
 #include <string.h>
@@ -12,11 +20,11 @@
 #include "Processes.h"
 
 // DECLARATIONS
-// Keep track of processes in OS (MAXPROC is set to 50)
+// Keep track of processes MAXPROC is set to 50
 Process processTable[MAXPROC];                  
 int nextPid = 1;
 
-// Exit code storage (indexed by process table slot) 
+// Exit code storage indexed by process table slot
 int exitCodeSlot[MAXPROC] = { 0 };
 
 // Ready queues (indexed by priority) 
@@ -24,7 +32,7 @@ static Process* readyHeads[HIGHEST_PRIORITY + 1];
 static Process* readyTails[HIGHEST_PRIORITY + 1];
 
 ///// PROCESS TABLE INITIALIZATION /////
-// Instantiate each process in the procTable (1 - MAXPROC)
+// Instantiate each process in the procTable 1 - MAXPROC
 // These could be done on demand but easier to make sure we have a clean set when a new process is created.
 void processes_init(void)
 {
@@ -42,7 +50,6 @@ void processes_init(void)
         processTable[i].priority = 0;
         processTable[i].entryPoint = NULL;
         processTable[i].stacksize = 0;
-
         processTable[i].status = PROCSTATE_EMPTY;       // O - SEE DECLARATION
         processTable[i].cpuTime = 0;                       		
         processTable[i].numChildren = 0;
@@ -50,20 +57,13 @@ void processes_init(void)
         processTable[i].receivedSignal = 0;
         processTable[i].blockReason = BLOCK_NONE;
         processTable[i].blockedPid = 0;
-
         exitCodeSlot[i] = 0;
-
-		// processTable[i].joinSem.count = 0;              // Added for semaphore logic in Test15
-        // processTable[i].joinSem.waiters = NULL;
-        // REMOVED FOLLOWING ON SWITCH TO SEMAPHORE LOGIC
-        // processTable[i].exited = 0;
-        // processTable[i].nextBlocked = NULL;
     }
 
-    for (int p = 0; p <= HIGHEST_PRIORITY; p++)
+    for (int priority = 0; priority <= HIGHEST_PRIORITY; priority++)
     {
-        readyHeads[p] = NULL;
-        readyTails[p] = NULL;
+        readyHeads[priority] = NULL;
+        readyTails[priority] = NULL;
     }
 }
 
@@ -108,29 +108,29 @@ void process_add_child(Process* parent, Process* child)
     }
 
     // Otherwise, append to tail to preserve spawn order (FIFO)
-    Process* cur = parent->pChildren;
-    while (cur->nextSiblingProcess != NULL)
+    Process* current = parent->pChildren;
+    while (current->nextSiblingProcess != NULL)
     {
-        cur = cur->nextSiblingProcess;
+        current = current->nextSiblingProcess;
     }
-    cur->nextSiblingProcess = child;
+    current->nextSiblingProcess = child;
 }
 
 // Searches a parent process's child list for a child that has terminated
 Process* process_find_term_child(Process* parent, Process** pPrevOut)
 {
-    Process* prev = NULL;
-    Process* cur = parent->pChildren;
+    Process* previous = NULL;
+    Process* current = parent->pChildren;
 
-    while (cur != NULL)
+    while (current != NULL)
     {
-        if (cur->status == PROCSTATE_TERMINATE)
+        if (current->status == PROCSTATE_TERMINATE)
         {
-            if (pPrevOut) *pPrevOut = prev;
-            return cur;
+            if (pPrevOut) *pPrevOut = previous;
+            return current;
         }
-        prev = cur;
-        cur = cur->nextSiblingProcess;
+        previous = current;
+        current = current->nextSiblingProcess;
     }
 
     if (pPrevOut) *pPrevOut = NULL;
@@ -138,10 +138,10 @@ Process* process_find_term_child(Process* parent, Process** pPrevOut)
 }
 
 // Removes a child process from its parent's list of children.
-void process_remove_term_child(Process* parent, Process* child, Process* prev)
+void process_remove_term_child(Process* parent, Process* child, Process* previous)
 {
-    if (prev == NULL) parent->pChildren = child->nextSiblingProcess;
-    else prev->nextSiblingProcess = child->nextSiblingProcess;
+    if (previous == NULL) parent->pChildren = child->nextSiblingProcess;
+    else previous->nextSiblingProcess = child->nextSiblingProcess;
 
     child->nextSiblingProcess = NULL;
 	parent->numChildren--;
@@ -149,19 +149,19 @@ void process_remove_term_child(Process* parent, Process* child, Process* prev)
 
 /* QUEUE HELPER FUNCTIONS */
 // Adds a process to the ready queue based
-void process_add_ready(Process* _proc)
+void process_add_ready(Process* _proclocal)
 {
-    int addready = _proc->priority;
-    _proc->nextReadyProcess = NULL;
+    int addready = _proclocal->priority;
+    _proclocal->nextReadyProcess = NULL;
 
     if (readyTails[addready] == NULL)
     {
-        readyHeads[addready] = readyTails[addready] = _proc;
+        readyHeads[addready] = readyTails[addready] = _proclocal;
     }
     else
     {
-        readyTails[addready]->nextReadyProcess = _proc;
-        readyTails[addready] = _proc;
+        readyTails[addready]->nextReadyProcess = _proclocal;
+        readyTails[addready] = _proclocal;
     }
 }
 
@@ -170,44 +170,22 @@ void process_add_ready(Process* _proc)
 Process* process_next_ready(void)
 {
     // Test06 - Correct pop READY
-    for (int pri = HIGHEST_PRIORITY; pri >= LOWEST_PRIORITY; pri--)
+    for (int priority = HIGHEST_PRIORITY; priority >= LOWEST_PRIORITY; priority--)
     {
-        while (readyHeads[pri] != NULL)
+        while (readyHeads[priority] != NULL)
         {
-            Process* p = readyHeads[pri];
-            readyHeads[pri] = p->nextReadyProcess;
-            if (readyHeads[pri] == NULL)
-                readyTails[pri] = NULL;
+            Process* _proclocal = readyHeads[priority];
+            readyHeads[priority] = _proclocal->nextReadyProcess;
+            if (readyHeads[priority] == NULL)
+                readyTails[priority] = NULL;
 
-            p->nextReadyProcess = NULL;
+            _proclocal->nextReadyProcess = NULL;
 
             // Only schedule READY processes.
-            if (p->status == PROCSTATE_READY)
-                return p;
+            if (_proclocal->status == PROCSTATE_READY)
+                return _proclocal;
         }
     }
-    return NULL;
-}
-
-// Searches for a parents child by PID in process table
-// Added in Test06 to locate the exact child being joined.
-Process* find_child(Process* parent, int pid, Process** pPrevOut)
-{
-    Process* prev = NULL;
-    Process* cur = parent->pChildren;
-
-    while (cur != NULL)
-    {
-        if (cur->pid == pid)
-        {
-            if (pPrevOut) *pPrevOut = prev;
-            return cur;
-        }
-        prev = cur;
-        cur = cur->nextSiblingProcess;
-    }
-
-    if (pPrevOut) *pPrevOut = NULL;
     return NULL;
 }
 
@@ -218,7 +196,7 @@ int process_in_ready_queue(int pri)
 }
 
 // Test27 Check if a PID exists anywhere in the process table, regardless of current status
-int check_pid_exists(int pid)
+int process_check_pid_exists(int pid)
 {
     for (int i = 0; i < MAXPROC; i++)
     {
