@@ -49,38 +49,40 @@ typedef struct _process
 	// struct			_process* pChildrenThatExited;		// Likely wont need this...addressing in k_wait
 	char			name[MAXNAME];					// Process name 
 	char			startArgs[MAXARG];				// Process arguments
-	void* context;						// Process's current context 
+	void*			context;						// Process's current context 
 	short			pid;							// Process id (pid) 
 	int				priority;
 	int				(*entryPoint) (void*);			// The entry point that is called from launch 
 	//char*			stack;							// NOT IN USE
 	unsigned int	stacksize;						// likely will not use
 	int				status;							// READY, QUIT, BLOCKED, etc.
-
 	DWORD 			cpuTime;                        // Total CPU time used by process	
 	DWORD			lastStartTime;					// last process start time	
 	int 			numChildren;                    // Number of child processes	
 	int				receivedSignal;					// 0 none, 1 was signaled
 	block_reason_t  blockReason;					// Handles BLOCK TYPE
 	int				blockedPid;						// pid this process is blocked (JOIN)
-	//ksem_t			joinSem;						// signaled when this process exits
-	//int				exited;							// boolean: set to 1 when terminated (optional but helpful)
+	// REMOVED FOLLOWING ON SWITCH TO SEMAPHORE LOGIC
+	//ksem_t			joinSem;					// signaled when this process exits
+	//int				exited;						// boolean: set to 1 when terminated (optional but helpful)
 } Process;
 
+// EXTERNAL FUNCTION DECLARATIONS
 extern Process processTable[MAXPROC];
 extern int nextPid;
 extern int exitCodeSlot[MAXPROC];
 
 // FUNCTION PROTOTYPES //
 // SEE FUNCTION DEFINITIONS FOR DESCRIPTIONS //
-Process* find_process_by_pid(int pid);
+Process* process_find_by_pid(int pid);
 Process* process_find_term_child(Process* parent, Process** pPrevOut);
-Process* next_ready_process(void);
-Process* find_child(Process* parent, int pid, Process** pPrevOut);
+Process* process_next_ready(void);
+Process* process_find_child(Process* parent, int pid, Process** pPrevOut);
 void processes_init(void);
 int process_find_free_slot(void);
 void process_add_child(Process* parent, Process* child);
-void remove_term_child(Process* parent, Process* child, Process* prev);
-void add_ready_process(Process* p);
-int ready_queue_has_process(int pri);
+void process_remove_term_child(Process* parent, Process* child, Process* prev);
+void process_add_ready(Process* p);
+int process_in_ready_queue(int pri);
+int check_pid_exists(int pid);
 

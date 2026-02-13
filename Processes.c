@@ -7,7 +7,6 @@
 
 #define _CRT_SECURE_NO_WARNINGS
 #include <string.h>
-
 #include "THREADSLib.h"
 #include "Scheduler.h"
 #include "Processes.h"
@@ -54,10 +53,11 @@ void processes_init(void)
 
         exitCodeSlot[i] = 0;
 
-		//processTable[i].joinSem.count = 0;              // Added for semaphore logic in Test15
-  //      processTable[i].joinSem.waiters = NULL;
-  //      processTable[i].exited = 0;
-        processTable[i].nextBlocked = NULL;
+		// processTable[i].joinSem.count = 0;              // Added for semaphore logic in Test15
+        // processTable[i].joinSem.waiters = NULL;
+        // REMOVED FOLLOWING ON SWITCH TO SEMAPHORE LOGIC
+        // processTable[i].exited = 0;
+        // processTable[i].nextBlocked = NULL;
     }
 
     for (int p = 0; p <= HIGHEST_PRIORITY; p++)
@@ -81,7 +81,7 @@ int process_find_free_slot(void)
 }
 
 // Searches the process table for a process by pid
-Process* find_process_by_pid(int pid)
+Process* process_find_by_pid(int pid)
 {
     //for (int i = 1; i < MAXPROC; i++)
 	for (int i = 0; i < MAXPROC; i++)  // CHANGING FROM 1 to 0!! Test19 Alter
@@ -138,7 +138,7 @@ Process* process_find_term_child(Process* parent, Process** pPrevOut)
 }
 
 // Removes a child process from its parent's list of children.
-void remove_term_child(Process* parent, Process* child, Process* prev)
+void process_remove_term_child(Process* parent, Process* child, Process* prev)
 {
     if (prev == NULL) parent->pChildren = child->nextSiblingProcess;
     else prev->nextSiblingProcess = child->nextSiblingProcess;
@@ -149,7 +149,7 @@ void remove_term_child(Process* parent, Process* child, Process* prev)
 
 /* QUEUE HELPER FUNCTIONS */
 // Adds a process to the ready queue based
-void add_ready_process(Process* _proc)
+void process_add_ready(Process* _proc)
 {
     int addready = _proc->priority;
     _proc->nextReadyProcess = NULL;
@@ -167,7 +167,7 @@ void add_ready_process(Process* _proc)
 
 // Selects and removes the highest priority READY process from the ready queues. 
 // Priority is determined from highest to lowest.
-Process* next_ready_process(void)
+Process* process_next_ready(void)
 {
     // Test06 - Correct pop READY
     for (int pri = HIGHEST_PRIORITY; pri >= LOWEST_PRIORITY; pri--)
@@ -212,7 +212,18 @@ Process* find_child(Process* parent, int pid, Process** pPrevOut)
 }
 
 // Test19 Add - Check if ready queue has process at priority to switch to
-int ready_queue_has_process(int pri)
+int process_in_ready_queue(int pri)
 {
     return (pri >= LOWEST_PRIORITY && pri <= HIGHEST_PRIORITY && readyHeads[pri] != NULL);
+}
+
+// Test27 Check if a PID exists anywhere in the process table, regardless of current status
+int check_pid_exists(int pid)
+{
+    for (int i = 0; i < MAXPROC; i++)
+    {
+        if (processTable[i].pid == pid)
+            return 1;   // count it as existing even if status is EMPTY (reaped case)
+    }
+    return 0;
 }

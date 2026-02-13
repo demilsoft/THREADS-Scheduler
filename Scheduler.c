@@ -18,11 +18,13 @@
 // DECLARATIONS ////////////////////////////////////////////////////
 Process* runningProcess = NULL;
 int debugFlag = 0;  // 0 = no debug output, 1 = debug output
-#define TIME_SLICE_MS 80
+#define TIME_SLICE_MS 250  //BUMPING UP TO EVEN OUT ORDERING
+/////////  CPU TIME OUTPUT FIX  //////////
+#define NOW_MS()   ((DWORD)(read_clock() / 1000))  // ADDING TO CONVERT OUTPUT TO milliseconds Fixes Test05, 08
 // END DECLARATIONS ////////////////////////////////////////////////
 
 // One join semaphore per process-table slot (pid % MAXPROC)
-static ksem_t joinSem[MAXPROC];
+static ksem_t joinSem[MAXPROC];  // sem_t local
 
 // FUNCTION PROTOTYPES /////////////////////////////////////////////
 static int watchdog(char*);
@@ -179,16 +181,17 @@ int k_spawn(char* name, int (*entryPoint)(void*), void* arg, int stacksize, int 
 
     if (priority < LOWEST_PRIORITY || priority > HIGHEST_PRIORITY)
     {
-        console_output(debugFlag, "spawn(): invalid priority value %d.\n", priority);
+        //console_output(debugFlag, "spawn(): invalid priority value %d.\n", priority);
+        console_output(debugFlag, "spawn(): Priority out of range.\n"); // Test21 Alter
         enableInterrupts();
-        return -1;
+        return -2;
     }
     //////////// SAFETY CHECKS ////////////
 
     // Test 18 Add - Correct stack size error handling
     if (stacksize < THREADS_MIN_STACK_SIZE)
     {
-		console_output(FALSE, "spawn(): stacksize too small.\n"); // Set to FALSE to avoid debug flag Test18 Add
+		console_output(FALSE, "spawn(): Stack size too small.\n"); // Set to FALSE to avoid debug flag Test18 Add
         enableInterrupts();
 		return -2;  // Return -2 Test18 Add
     }
@@ -217,7 +220,7 @@ int k_spawn(char* name, int (*entryPoint)(void*), void* arg, int stacksize, int 
     if (slot < 0)
     {
         enableInterrupts();
-        return -1; // or a more specific "no more processes" code if your spec defines it
+        return -4;      // or a more specific "no more processes" code if your spec defines it
     }
 
     pNewProc = &processTable[slot];
@@ -231,7 +234,7 @@ int k_spawn(char* name, int (*entryPoint)(void*), void* arg, int stacksize, int 
     nextPid++;  // move to the next candidate for the next spawn
 
     // Test15 Add
-    // Reset the join semaphore for this slot (fresh process)
+    // Reset the join semaphore for this slot 
     ksem_init(&joinSem[slot], 0);
 
     // Save process initial base values
@@ -254,7 +257,7 @@ int k_spawn(char* name, int (*entryPoint)(void*), void* arg, int stacksize, int 
     pNewProc->context = context_initialize(launch, stacksize, arg);
 
     // Add to ready queue
-    add_ready_process(pNewProc);
+    process_add_ready(pNewProc);
 
     // Preempt if new process is higher priority than currently running
     int preempt = (runningProcess != NULL) &&
@@ -314,6 +317,19 @@ static int launch(void* args)
         -5 if the process was signaled in the join
 
 ************************************************************************ */
+/**************************************************************************
+   Name - k_wait
+
+   Purpose - Wait for a child process to quit.  Return right away if
+             a child has already quit.
+
+   Parameters - Output parameter for the child's exit code.
+
+   Returns - the pid of the quitting child, or
+        -4 if the process has no children
+        -5 if the process was signaled in the join
+
+************************************************************************ */
 int k_wait(int* code)
 {
     // Test kernel mode
@@ -327,7 +343,7 @@ int k_wait(int* code)
     {
         enableInterrupts();
         //return -4;
-		return -1;   // Test19 Change
+        return -1;   // Test19 Change
     }
     if (runningProcess->pChildren == NULL)
     {
@@ -336,10 +352,7 @@ int k_wait(int* code)
         return -1;   // Test19 Change
     }
 
-    /* block until a child quits  Test13 Add */
-    runningProcess->status = PROCSTATE_BLOCKED;
-    runningProcess->blockReason = BLOCK_WAIT;
-
+    // Expanded for test 04, 05, 19 to fix ordering issue
     while (1)
     {
         Process* prev = NULL;
@@ -356,22 +369,25 @@ int k_wait(int* code)
                 *code = exitCodeSlot[slot];
 
             // Remove from parent's child list
-            remove_term_child(runningProcess, termchild, prev);
+            process_remove_term_child(runningProcess, termchild, prev);
 
-            // Reclaim the process table entry (so old PIDs don't linger into later dumps)
-            // memset(&processTable[slot], 0, sizeof(Process));
+            // reset entry
             // Changed for Test06 and Test15
             processTable[slot].status = PROCSTATE_EMPTY;
-            processTable[slot].context = NULL;    
-            processTable[slot].pChildren = NULL;  
-            processTable[slot].pParent = NULL;     
-            // exitCodeSlot[slot] = 0;
+            processTable[slot].context = NULL;
+            processTable[slot].pChildren = NULL;
+            processTable[slot].pParent = NULL;
+            processTable[slot].pid = 0;   // Test26 fix - late join fatal
+
+            // We are returning to user code; make sure our state reflects that.
+            runningProcess->status = PROCSTATE_RUNNING;
+            runningProcess->blockReason = BLOCK_NONE;
 
             enableInterrupts();
             return pid;
         }
 
-        // Set block status and WAIT type Test13 Add
+        /* block until a child quits  Test13 Add */
         runningProcess->status = PROCSTATE_BLOCKED;
         runningProcess->blockReason = BLOCK_WAIT;
 
@@ -381,10 +397,24 @@ int k_wait(int* code)
 
         // When we resume here, we are running again
         if (runningProcess != NULL)
+        {
             runningProcess->status = PROCSTATE_RUNNING;
+            runningProcess->blockReason = BLOCK_NONE;  // important: don't keep WAIT reason while RUNNING
+        }
     }
 }
 
+/**************************************************************************
+   Name - k_exit
+
+   Purpose - Exits a process and coordinates with the parent for cleanup
+             and return of the exit code.
+
+   Parameters - the code to return to the grieving parent
+
+   Returns - nothing
+
+*************************************************************************/
 /**************************************************************************
    Name - k_exit
 
@@ -423,7 +453,8 @@ void k_exit(int exitcode)
         Process* _proclocalchild = _proclocal->pChildren;
         while (_proclocalchild != NULL)
         {
-            if (_proclocalchild->status != PROCSTATE_TERMINATE && _proclocalchild->status != PROCSTATE_EMPTY)
+            if (_proclocalchild->status != PROCSTATE_TERMINATE &&
+                _proclocalchild->status != PROCSTATE_EMPTY)
             {
                 // reenable to normal bevavior
                 enableInterrupts();
@@ -451,7 +482,7 @@ void k_exit(int exitcode)
     }
 
     // Update cpu time before terminating
-    DWORD now = read_clock();
+    DWORD now = NOW_MS();
     _proclocal->cpuTime += (now - _proclocal->lastStartTime);
 
     _proclocal->status = PROCSTATE_TERMINATE;
@@ -460,12 +491,25 @@ void k_exit(int exitcode)
     // Wake any processes blocked on JOIN (replaces blockedPid scan loop logic)
     ksem_broadcast(&joinSem[mySlot]);
 
-    /* Wake parent if it is waiting */
+    /* Wake parent if it is waiting - expanded all secenarios to fix order bug */
     if (_proclocal->pParent != NULL && _proclocal->pParent->status == PROCSTATE_BLOCKED)
     {
         _proclocal->pParent->status = PROCSTATE_READY;
+
+        // Test19 fix if parent was waiting, run it now. Also fixes earlier test cases
+        if (_proclocal->pParent->blockReason == BLOCK_WAIT)
+        {
+            // Put parent back on its ready queue and immediately schedule
+            _proclocal->pParent->blockReason = BLOCK_NONE;
+            process_add_ready(_proclocal->pParent);
+
+            enableInterrupts();
+            dispatcher();
+            return; // important: stop k_exit here (we already switched away)
+        }
+
         // Add to ready list
-        add_ready_process(_proclocal->pParent);
+        process_add_ready(_proclocal->pParent);
     }
 
     /* If no parent, end the system */
@@ -503,7 +547,7 @@ int k_kill(int pid, int signal)
 
     disableInterrupts();
 
-    Process* _proclocal = find_process_by_pid(pid);
+    Process* _proclocal = process_find_by_pid(pid);
 
     if (_proclocal == NULL)
     {
@@ -522,7 +566,7 @@ int k_kill(int pid, int signal)
         if (_proclocal->status == PROCSTATE_BLOCKED)
         {
             _proclocal->status = PROCSTATE_READY;
-            add_ready_process(_proclocal);
+            process_add_ready(_proclocal);
         }
     }
 
@@ -555,7 +599,7 @@ void dispatcher()
     // ******At or higher than current process priority
 
     // Check the ready list for next priority ready process
-    nextProcess = next_ready_process();
+    nextProcess = process_next_ready();
 
     // No new ready process found continue running current process
     if (nextProcess == NULL)
@@ -583,13 +627,13 @@ void dispatcher()
     if (runningProcess != NULL && runningProcess->status == PROCSTATE_RUNNING)
     {
         runningProcess->status = PROCSTATE_READY;
-        add_ready_process(runningProcess);
+        process_add_ready(runningProcess);
     }
 
     // If the current running process is not null and a new process switch is coming update its cpu time
     if (runningProcess != NULL && nextProcess != NULL) {
         // Added to calculate cpu time when process is switched out
-        DWORD now = read_clock();
+        DWORD now = NOW_MS(); // Fixed calculations
         runningProcess->cpuTime += (now - runningProcess->lastStartTime);
     }
 
@@ -599,7 +643,7 @@ void dispatcher()
     runningProcess->blockReason = BLOCK_NONE;
 
     // start cpu running clock time
-    runningProcess->lastStartTime = read_clock();
+    runningProcess->lastStartTime = NOW_MS();  // Fixed calculations
 
     enableInterrupts();
 
@@ -627,7 +671,7 @@ static int watchdog(char* dummy)
     while (1)
     {
         check_deadlock();
-        dispatcher();		//POSSIBLY NOT NEEDED HERE
+        dispatcher();		            // POSSIBLY NOT NEEDED HERE
     }
     return 0;
 }
@@ -636,7 +680,6 @@ static int watchdog(char* dummy)
 static inline void enableInterrupts()
 {
     /* We ARE in kernel mode */
-
     int psr = get_psr();
     psr = psr | PSR_INTERRUPTS;         // bitwise OR to set the interrupt bit
     set_psr(psr);
@@ -646,7 +689,6 @@ static inline void enableInterrupts()
 static inline void disableInterrupts()
 {
     /* We ARE in kernel mode */
-
     int psr = get_psr();
     psr = psr & ~PSR_INTERRUPTS;        // bitwise AND with NOT to clear the interrupt bit
     set_psr(psr);
@@ -656,7 +698,7 @@ static inline void disableInterrupts()
 // Displays current process struct values
 void display_process_table()
 {
-    // IN DEVELOMENT TEST04 - NOT COMPELTE
+	char stateBuffer[32]; //Test22 Add for unknown block reason
 
     // Print out header pro process table
     console_output(FALSE, "PID\tParent\tPriority\tStatus\t\t# Kids\tCPUtime\tName\n");
@@ -670,19 +712,20 @@ void display_process_table()
         if (_proclocal->status == PROCSTATE_EMPTY)
             continue;
 
-        const char* stateStr = "UNKNOWN";
+        //const char* stateStr = "UNKNOWN";
         switch (_proclocal->status)
         {
-        case PROCSTATE_READY:     stateStr = "READY";     break;
-        case PROCSTATE_RUNNING:   stateStr = "RUNNING";   break;
+        case PROCSTATE_READY:     strcpy(stateBuffer, "READY");     break;
+        case PROCSTATE_RUNNING:   strcpy(stateBuffer, "RUNNING");   break;
             //case PROCSTATE_BLOCKED:   stateStr = "BLOCKED";   break;
-            // Alter output display for blocked status showing reason Test13 Add
+            // Alter output display for blocked status showing reason - Test13 Add
         case PROCSTATE_BLOCKED:
-            if (_proclocal->blockReason == BLOCK_WAIT) stateStr = "WAIT BLOCK";
-            else if (_proclocal->blockReason == BLOCK_JOIN) stateStr = "JOIN BLOCK";
-            else stateStr = "BLOCKED";
+            if (_proclocal->blockReason == BLOCK_WAIT) strcpy(stateBuffer, "WAIT BLOCK");
+            else if (_proclocal->blockReason == BLOCK_JOIN) strcpy(stateBuffer, "JOIN BLOCK");
+            else snprintf(stateBuffer, sizeof(stateBuffer), "%d", _proclocal->blockReason); // Test22 Add - unknown block reason
             break;
-        case PROCSTATE_TERMINATE: stateStr = "TERMINATE"; break;
+        case PROCSTATE_TERMINATE: strcpy(stateBuffer, "TERMINATE"); break;
+        default: strcpy(stateBuffer, "UNKNOWN"); break;
         }
 
         int ppid = (_proclocal->pParent != NULL) ? _proclocal->pParent->pid : -1;
@@ -691,9 +734,9 @@ void display_process_table()
             _proclocal->pid,            // PID
             ppid,                       // Parent PID
             _proclocal->priority,       // Priority
-            stateStr,                   // Status
+            stateBuffer,                // Status
             _proclocal->numChildren,    // # Kids
-            _proclocal->cpuTime,        // CPU Time
+            _proclocal->cpuTime, // CPU Time
             _proclocal->name            // Name
         );
     }
@@ -713,6 +756,8 @@ int k_getpid()
 /**************************************************************************
    Name - k_join
 ***************************************************************************/
+// Helper: determine whether a PID exists anywhere in the process table.
+// (Used to satisfy both: "halt on truly non-existent pid" AND "allow late join after reap".)
 int k_join(int pid, int* pChildExitCode)
 {
     // Kernel mode validation Test11 Add
@@ -747,47 +792,61 @@ int k_join(int pid, int* pChildExitCode)
     // pid % MAXPROC must refer to the process's position in the process table.
     int slot = pid % MAXPROC;
 
+    // Track whether we actually blocked waiting on this join.
+    // If we blocked once, we must allow success even if the parent reaps the slot later (Test17).
+    int blockedOnce = 0;
+
     while (1)
     {
-        // join is by PID Test13 Add
-        // IMPORTANT: we validate the mapping using the pid stored in the slot,
-        // because the target may already be reaped by k_wait() (Test15 case).
+        // If the pid is not currently in the slot, then it does not exist (late join) => HALT (Test26)
+        // NOTE: If we already blocked and got woken, the parent might have reaped/cleared pid;
+        //       in that case we still succeed using exitCodeSlot[slot] (Test17).
         if (processTable[slot].pid != pid)
         {
-            // If pid doesn't exist fail safety check
+            if (!blockedOnce)
+            {
+                enableInterrupts();
+                console_output(FALSE, "join: attempting to join a process that does not exist.\n");
+                stop(1); // Print HALT
+            }
+
+            // We were already waiting and got woken; slot was reaped after exit.
+            if (pChildExitCode != NULL)
+                *pChildExitCode = exitCodeSlot[slot];
+
             enableInterrupts();
-            return -1;
+            return 0;
         }
 
-        // If target has terminated OR has been reaped (EMPTY), return exit code immediately
-        // Test15 Add: join must still succeed even if another process already waited/reaped it
-        if (processTable[slot].status == PROCSTATE_TERMINATE ||
-            processTable[slot].status == PROCSTATE_EMPTY)
+        // If target has terminated, return exit code immediately
+        if (processTable[slot].status == PROCSTATE_TERMINATE)
         {
             if (pChildExitCode != NULL)
                 *pChildExitCode = exitCodeSlot[slot];
 
-            // clear block join and tag Test15 Add
-            // NOTE: blockedPid no longer needed with semaphore solution
-            //runningProcess->blockReason = BLOCK_NONE;
+            enableInterrupts();
+            return 0;
+        }
+
+        // If it got reaped while still matching pid (rare with your cleanup order), also succeed
+        // only if we were already waiting; otherwise it would have been caught above.
+        if (processTable[slot].status == PROCSTATE_EMPTY)
+        {
+            if (pChildExitCode != NULL)
+                *pChildExitCode = exitCodeSlot[slot];
 
             enableInterrupts();
-            return pid;
+            return 0;
         }
 
         // Otherwise block on JOIN (Semaphore-based)
-        // Test13 Add (status + reason preserved for process table)
-        //runningProcess->status = PROCSTATE_BLOCKED;
-        //runningProcess->blockReason = BLOCK_JOIN;
-
-        // Test15 Add
-        // Wait on the target's join semaphore (wakes ALL joiners on exit)
+        // Test15 Add: Wait on the target's join semaphore (wakes ALL joiners on exit)
+        blockedOnce = 1;
         ksem_wait(&joinSem[slot]);
 
         // loop and re-check target
     }
 }
-
 /**************************************************************************
     Name - timer_interrupt_handler
     Interrupt Timer Handler Function - Added Test05
@@ -815,15 +874,14 @@ static void timer_interrupt_handler(char deviceId[32], uint8_t command, uint32_t
         //  TESTING 19 COMMENT
         if (strcmp(runningProcess->name, "watchdog") != 0)
         {
-            DWORD now = read_clock();
-
+            DWORD now = NOW_MS();
             if ((now - runningProcess->lastStartTime) >= TIME_SLICE_MS)
             {
                 // Only preempt if there is someone else ready at my priority - Test19 Add
-                if (ready_queue_has_process(runningProcess->priority))
+                if (process_in_ready_queue(runningProcess->priority))
                 {
                     runningProcess->status = PROCSTATE_READY;
-                    add_ready_process(runningProcess);
+                    process_add_ready(runningProcess);
                     dispatcher();
                     return;
                 }
@@ -838,23 +896,62 @@ static void timer_interrupt_handler(char deviceId[32], uint8_t command, uint32_t
 }
 
 /**************************************************************************
-   Name - unblock
+   Name - unblock - TEST22 ADD
 *************************************************************************/
 int unblock(int pid)
 {
-    // Currently not in use
-    // return 0;
-    // FUTURE TESTS
-    (void)pid;
+    require_kernel_mode();
+    disableInterrupts();
+
+    Process* _proclocal = process_find_by_pid(pid);
+    if (_proclocal == NULL)
+    {
+        enableInterrupts();
+        return -1;
+    }
+
+    if (_proclocal->status != PROCSTATE_BLOCKED)
+    {
+        enableInterrupts();
+        return -1;
+    }
+
+    _proclocal->status = PROCSTATE_READY;
+    _proclocal->blockReason = BLOCK_NONE;
+    process_add_ready(_proclocal);
+
+    enableInterrupts();
     return 0;
 }
 
 /*************************************************************************
-   Name - block
+   Name - block - TEST22 Add - Updated Test31
 *************************************************************************/
-int block(int newStatus)
+int block(int code)
 {
-    //(void)newStatus;
+    require_kernel_mode();
+    disableInterrupts();
+
+    if (runningProcess == NULL)
+    {
+        enableInterrupts();
+        return -1;
+    }
+
+    // Test31 - disallowing codes 0-10 as reserved - arbitrary to me but i do use 14 in Test22
+    // Test 31 uses 6?
+    if (code >= 0  && code <= 10)
+    {
+        console_output(FALSE, "block: function called with a reserved status value.\n");
+        stop(1);        // prints "THREADS Halted: Error code 1."
+    }
+
+    // Block the CURRENT process with the provided code
+    runningProcess->status = PROCSTATE_BLOCKED;
+    runningProcess->blockReason = code;
+
+    enableInterrupts();
+    dispatcher();               // yield CPU until someone unblocks us
     return 0;
 }
 
@@ -872,8 +969,10 @@ int signaled()
 *************************************************************************/
 int read_time()
 {
-    // Currently not in use
-    return 0;
+    // using system_clock NOT get_start_time()
+    int readtime = read_clock();  // Test30 Add
+    return readtime;
+    //return (int)system_clock();
 }
 
 /*************************************************************************
@@ -881,8 +980,11 @@ int read_time()
 *************************************************************************/
 DWORD read_clock()
 {
+    //DWORD nowtime = system_clock();
+    // Change to convert to milliseconds Added for Test04, 05, 08, 19
     DWORD nowtime = system_clock();
     return nowtime;
+    //return (DWORD)system_clock();
 }
 
 /*************************************************************************
@@ -914,23 +1016,23 @@ int check_io_scheduler()
     return false;
 }
 
-/////////////////////// SEMAPHORE IMPLEMENTATION (Test15) //////////////////////////
+/////////////////////// SEMAPHORE IMPLEMENTATION Test15 Add //////////////////////////
 // Initialize a semaphore
-static void ksem_init(ksem_t* s, int initialCount)
+static void ksem_init(ksem_t* sem_t, int initialCount)
 {
-    s->count = initialCount;
-    s->waiters = NULL;
-    s->waitersTail = NULL;  // Test17 Add FIFO
+    sem_t->count = initialCount;
+    sem_t->waiters = NULL;
+    sem_t->waitersTail = NULL;  // Test17 Add FIFO
 }
 
 //Wait semaphore Test15 Add
-static void ksem_wait(ksem_t* s)
+static void ksem_wait(ksem_t* sem_t)
 {
     // interrupts already disabled by caller
 
-    if (s->count > 0)
+    if (sem_t->count > 0)
     {
-        s->count--;
+        sem_t->count--;
         return;
     }
 
@@ -939,14 +1041,14 @@ static void ksem_wait(ksem_t* s)
     runningProcess->nextBlocked = NULL;
 
     // FIFO enqueue Test17 Add
-    if (s->waitersTail == NULL)
+    if (sem_t->waitersTail == NULL)
     {
-        s->waiters = s->waitersTail = runningProcess;
+        sem_t->waiters = sem_t->waitersTail = runningProcess;
     }
     else
     {
-        s->waitersTail->nextBlocked = runningProcess;
-        s->waitersTail = runningProcess;
+        sem_t->waitersTail->nextBlocked = runningProcess;
+        sem_t->waitersTail = runningProcess;
     }
 
     enableInterrupts();
@@ -955,31 +1057,45 @@ static void ksem_wait(ksem_t* s)
 }
 
 // Broadcast (wake ALL waiters Test15 Add
-static void ksem_broadcast(ksem_t* s)
+static void ksem_broadcast(ksem_t* sem_t)
 {
     // interrupts already disabled by caller
 
-    Process* p = s->waiters;
-    s->waiters = NULL;
-    s->waitersTail = NULL;
+    Process* _proclocal = sem_t->waiters;
+    sem_t->waiters = NULL;
+    sem_t->waitersTail = NULL;
 
-    while (p != NULL)
+    while (_proclocal != NULL)
     {
-        Process* next = p->nextBlocked;
-        p->nextBlocked = NULL;
+        Process* next = _proclocal->nextBlocked;
+        _proclocal->nextBlocked = NULL;
 
-        if (p->status == PROCSTATE_BLOCKED)
+        if (_proclocal->status == PROCSTATE_BLOCKED)
         {
-            p->status = PROCSTATE_READY;
-            p->blockReason = BLOCK_NONE;
-            add_ready_process(p);
+            _proclocal->status = PROCSTATE_READY;
+            _proclocal->blockReason = BLOCK_NONE;
+            process_add_ready(_proclocal);
         }
 
-        p = next;
+        _proclocal = next;
     }
 
-    // keep it "signaled" for late joiners (join after exit/reap)
-    s->count = 1;
+    // keep it signaled for late joiners 
+    sem_t->count = 1;
+}
+
+// checks to see if pid is current use
+static int check_pid_exists(int pid)
+{
+    for (int i = 0; i < MAXPROC; i++)
+    {
+        // Count as "exists" if we still remember the PID in any slot (even if EMPTY due to reap).
+        if (processTable[i].status != PROCSTATE_EMPTY && processTable[i].pid == pid)
+        {
+            return 1;
+        }
+    }
+    return 0;
 }
 ///////////////////////////////////////////////////////////////////////////
 ///////////////////////  DEBUG CONSOLE FUNCTIONS //////////////////////////
